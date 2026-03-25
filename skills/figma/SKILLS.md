@@ -89,11 +89,15 @@ Run the Python helper script to generate tile images:
 ```bash
 python scripts/split_image.py \
   --input "<source-image-path>" \
-  --output-dir "<workspace>/ingestion/processing/tiles/" \
+  --output-dir "<temp-working-dir>/tiles/" \
   --rows <R> \
   --cols <C> \
   --overlap <0.10>
 ```
+
+The `<temp-working-dir>` should be a transient location (e.g., a system
+temp directory or a project-local scratch folder). Do NOT assume a fixed
+workspace path — use the OS temp directory or ask the user if uncertain.
 
 The script produces numbered tile files:
 `tile_R0_C0.png`, `tile_R0_C1.png`, … `tile_R<n>_C<n>.png`
@@ -252,15 +256,25 @@ illegible areas — each marked with `requires-review: true`>
 
 ### Step 6 — Save and Report
 
-1. Save the markdown output to:
-   `ai-workspace/local-knowledge-base/discovery/<category>/<filename>.md`
-   where `<category>` is derived from the diagram type (e.g.,
-   `event-storming/big-picture/`, `research/`, etc.).
-2. If a master index exists at
-   `ai-workspace/local-knowledge-base/_master-index.md`, append an entry.
-3. Clean up tile images from the processing directory (or archive if
+1. **Determine output location.** The skill does NOT assume a fixed
+   directory. Resolve the output path in this priority order:
+   - **User-specified path** — if the user provides an explicit output
+     directory or file path, use it.
+   - **Project convention** — check for project steering, environment
+     variables, or workspace configuration that defines a knowledge base
+     or output root (e.g., a `KNOWLEDGE_BASE_DIR` env var, a path in
+     `.kiro/steering/`, or an equivalent project config).
+   - **Prompt the user** — if neither of the above yields a path, ask the
+     user where to save the output before writing anything.
+2. Save the markdown file to the resolved location, organizing by diagram
+   category subdirectory (e.g., `event-storming/big-picture/`,
+   `architecture/`, etc.) if the target directory already follows that
+   convention — otherwise save flat.
+3. If a master index file (e.g., `_master-index.md`) exists in the same
+   output root, append an entry for the new record.
+4. Clean up tile images from the processing directory (or archive if
    user requests preservation).
-4. Present a summary to the user:
+5. Present a summary to the user:
    - Elements extracted count by type
    - Confidence distribution
    - Items flagged for review
