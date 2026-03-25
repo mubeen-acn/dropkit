@@ -1,0 +1,24 @@
+{
+  "id": "diagram-to-markdown",
+  "name": "Diagram to Markdown",
+  "version": "1.0.0",
+  "description": "Ingest architecture diagrams, event storming boards, and event maps from images. Splits large images into a configurable grid, reads each tile via the AWS Document Loader MCP server, and produces structured markdown suitable for downstream SDLC artifacts.",
+  "category": "converters",
+  "tags": ["diagram", "image", "architecture", "event-storming", "markdown", "conversion", "mcp"],
+  "author": "dropkit",
+  "license": "Apache-2.0",
+  "deps": {
+    "python": ["Pillow"],
+    "mcp": ["awslabs.document-loader-mcp-server"]
+  },
+  "input": {
+    "arguments": "file path or glob pattern (e.g., diagrams/*.png)",
+    "fileTypes": [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+  },
+  "output": {
+    "fileTypes": [".md"]
+  },
+  "targets": {
+    "default": { "file": "SKILL.md" }
+  }
+}
