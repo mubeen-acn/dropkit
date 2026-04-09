@@ -1,5 +1,5 @@
 ---
-name: img-to-markdown
+name: diagram-ingestion
 description: >
   Ingest architecture diagrams, event storming boards, and event maps from
   images. Uses a two-pass strategy — an overview pass for structural layout
@@ -15,6 +15,7 @@ description: >
 compatibility:
   - Kiro
   - Claude Code
+  - Cursor
 metadata:
   category: document-processing
   complexity: intermediate
@@ -81,6 +82,14 @@ An optional **focus-region** mechanism lets the overview pass identify areas
 that need targeted re-cropping (e.g., a dense cluster of sticky notes or a
 complex integration boundary) for a third, precision pass.
 
+An automatic **pre-scaling** step handles source images that are so large
+that even individual tiles would exceed the MCP server's file-size limit
+(default 50 MB) or the longest dimension exceeds a safe working threshold
+(default 8000 px). When triggered, the source is downscaled to a working
+size before any tiling occurs. The pre-scale metadata is recorded in all
+manifests so downstream analysis can map coordinates back to the original
+image if needed.
+
 ---
 
 ## Workflow
@@ -96,8 +105,15 @@ When the user provides an image file path (or drops an image into chat):
    python scripts/split_image.py recommend --input "<source-image-path>"
    ```
    This returns the source dimensions, whether a single pass suffices,
-   and recommended viewport/stride settings.
-3. If the image is small enough for single-pass analysis
+   recommended viewport/stride settings, and whether the image needs
+   automatic pre-scaling (with the effective working dimensions after
+   pre-scale).
+3. If the recommend output shows `needs_prescale: true`, inform the user
+   that the source image will be automatically downscaled before tiling.
+   The pre-scale is transparent — all subsequent steps work on the
+   working-size image, and manifests record the original-to-working
+   coordinate mapping.
+4. If the image is small enough for single-pass analysis
    (both dimensions ≤ 1200 px), skip directly to **Step 3** using the
    original image.
 4. Otherwise, present the recommendation to the user and confirm:
@@ -105,6 +121,9 @@ When the user provides an image file path (or drops an image into chat):
      (default 1200 px).
    - **Stride** — how far the window moves between captures (default 800 px).
      Smaller stride = more overlap = more tiles but better coverage.
+   - **Max source dimension** — threshold above which the source is
+     pre-scaled (default 8000 px). User can override if they want to
+     preserve more resolution at the cost of more/larger tiles.
    - **Diagram type** — auto-detect or let user specify:
      architecture, event-storming, process-flow, domain-model, conceptual.
 
@@ -118,22 +137,26 @@ workspace path — use the OS temp directory or ask the user if uncertain.
 
 ```bash
 python scripts/split_image.py overview \
-  --input "" \
-  --output-dir "/tiles/" \
-  --max-dim 1200
+  --input "<source-image-path>" \
+  --output-dir "<temp-working-dir>/tiles/" \
+  --max-dim 1200 \
+  [--max-source-dim 8000]
 ```
 
 Produces `overview.png` — a single downscaled image — and
-`overview_manifest.json` with scale factor metadata.
+`overview_manifest.json` with scale factor metadata. If the source
+exceeds `max-source-dim`, it is automatically pre-scaled first (recorded
+in the manifest's `prescale` field).
 
 **Pass 2 — Detail tiles:**
 
 ```bash
 python scripts/split_image.py detail \
-  --input "" \
-  --output-dir "/tiles/" \
+  --input "<source-image-path>" \
+  --output-dir "<temp-working-dir>/tiles/" \
   --viewport 1200 \
   --stride 800 \
+  [--max-source-dim 8000] \
   [--focus-regions focus_regions.json]
 ```
 
@@ -266,72 +289,78 @@ a standard knowledge record format:
 
 ```yaml
 ---
-title: ""
-source-file: ""
+title: "<Diagram title or user-provided name>"
+source-file: "<original image filename>"
 content-type: image
-content-category: 
-ingestion-date: ""
-diagram-type: ""
+content-category: <architecture-diagram | event-storming-big-picture | event-storming-design-level | process-diagram | domain-model | conceptual>
+ingestion-date: "<ISO-8601 datetime>"
+diagram-type: "<detected or user-specified type>"
 processing:
   strategy: two-pass-sliding-window
-  overview-scale-factor: 
-  viewport: 
-  stride: 
-  overlap-pct: 
-  sliding-window-tiles: 
-  focus-region-tiles: 
-  total-tiles-analyzed: 
+  overview-scale-factor: <scale>
+  viewport: <px>
+  stride: <px>
+  overlap-pct: <computed>
+  sliding-window-tiles: <count>
+  focus-region-tiles: <count>
+  total-tiles-analyzed: <count>
 ingestion-quality:
-  extraction-confidence: 
-  completeness: 
-  source-quality: 
-  requires-review: 
-  quality-notes: ""
+  extraction-confidence: <high | medium | low>
+  completeness: <complete | partial | minimal>
+  source-quality: <high | medium | low>
+  requires-review: <true | false>
+  quality-notes: "<specific observations>"
 ---
 ```
 
 The markdown body should follow this structure:
 
 ```markdown
-# 
+# <Diagram Title>
 
 ## Overview
 <1–3 sentence summary of what the diagram depicts, derived from the
 overview pass>
 
 ## Diagram Type
-
+<Detected type and notation if identifiable (C4, BPMN, UML, informal,
+event storming)>
 
 ## Structural Layout
-
+<Description of the overall spatial organization derived from the
+overview pass — flow direction, grouping strategy, number of major
+sections, notable patterns>
 
 ## Elements
 
 ### Components / Entities / Events
-
+<Table of all extracted elements, deduplicated>
 
 | # | Name | Type | Description | Source Region | Confidence |
 |---|------|------|-------------|---------------|------------|
 | 1 | ...  | ...  | ...         | top-left      | high       |
 
 ### Relationships / Flows
-
+<Table of connections between elements>
 
 | Source | Target | Type/Label | Direction |
 |--------|--------|------------|-----------|
 | ...    | ...    | ...        | →         |
 
 ### Boundaries / Groups
-
+<Identified groupings, swim lanes, bounded contexts, containers>
 
 ### Annotations / Notes
-
+<Free-text annotations, legends, hot spots>
 
 ## Ambiguities and Review Items
-
+<Elements that could not be confidently extracted, illegible areas,
+inconsistencies between overview and detail passes — each marked with
+`requires-review: true`>
 
 ## Downstream Usage Guidance
-
+<Recommendations for which SDLC commands or processes can consume this
+output — determined by diagram type>
 ```
 
 ### Step 6 — Save and Report
@@ -383,8 +412,8 @@ overview pass>
 - If `read_image` MCP tool fails on a tile, log the failure, skip the tile,
   and note the gap in the final output under Ambiguities.
 - If the image is too large for the configured `MAX_FILE_SIZE_MB` on the
-  MCP server, suggest increasing the stride (fewer, smaller tiles) or
-  resizing the source.
+  MCP server even after pre-scaling, suggest further reducing
+  `--max-source-dim` or increasing stride.
 - If the detail pass produces an excessive number of tiles (>100), warn
   the user and suggest increasing stride or reducing viewport.
 - Provide a clear error message and recovery suggestion for each failure mode.
@@ -393,13 +422,15 @@ overview pass>
 
 ## Configuration Defaults
 
-| Parameter        | Default  | Notes                                           |
-|------------------|----------|-------------------------------------------------|
-| Overview max dim | 1200 px  | Downscale target for structural analysis        |
-| Viewport         | 1200 px  | Sliding window size for detail pass             |
-| Stride           | 800 px   | Step size; overlap = (viewport-stride)/viewport |
-| Effective overlap| ~33%     | At default settings                             |
-| Min stride       | 200 px   | Floor to prevent excessive tile counts          |
-| Max tile warning | 100      | Warn if detail pass exceeds this count          |
-| Tile format      | PNG      | Lossless for best extraction quality            |
-| Output format    | markdown | With YAML frontmatter                           |
+| Parameter        | Default  | Notes                                            |
+|------------------|----------|--------------------------------------------------|
+| Overview max dim | 1200 px  | Downscale target for structural analysis         |
+| Viewport         | 1200 px  | Sliding window size for detail pass              |
+| Stride           | 800 px   | Step size; overlap = (viewport-stride)/viewport  |
+| Effective overlap| ~33%     | At default settings                              |
+| Max source dim   | 8000 px  | Auto-downscale source images above this          |
+| Max tile size    | 50 MB    | MCP server default; triggers pre-scale if needed |
+| Min stride       | 200 px   | Floor to prevent excessive tile counts           |
+| Max tile warning | 100      | Warn if detail pass exceeds this count           |
+| Tile format      | PNG      | Lossless for best extraction quality             |
+| Output format    | markdown | With YAML frontmatter                            |
