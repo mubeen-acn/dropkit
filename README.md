@@ -164,7 +164,12 @@ Convert an Excel spreadsheet to Markdown tables.
 Crawl an authenticated Confluence space and write each page as Markdown with YAML frontmatter. Supports Atlassian Cloud and on-prem Server/Data Center.
 
 - **Install deps**: `python -m pip install -r skills/crawlers/confluence-crawler/requirements.txt`
-- **One-time setup** (interactive — prompts for base URL, email if Cloud, and API token; writes `~/.config/confluence-crawler/config.env` at mode 0600):
+- **Get an access token** (required before running setup):
+
+  - **Atlassian Cloud** — go to https://id.atlassian.com/manage-profile/security/api-tokens, click **Create API token**, name it, and copy the value. Authentication uses your Atlassian account email plus this token.
+  - **Server / Data Center (on-prem)** — in Confluence, click your avatar → **Profile** → **Personal Access Tokens** → **Create token**. Name the token, set an expiry, click **Create**, and copy the value shown (it is only displayed once). Authentication uses the token as a bearer credential; no email is required.
+
+- **One-time setup** (interactive — prompts for base URL, email if Cloud, and the token from the step above; writes `~/.config/confluence-crawler/config.env` at mode 0600):
 
   ```bash
   bash skills/crawlers/confluence-crawler/scripts/setup_credentials.sh
