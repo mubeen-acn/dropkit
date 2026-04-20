@@ -7,9 +7,8 @@
   "tags": ["pdf", "docx", "pptx", "xlsx", "image", "markdown", "conversion", "docling"],
   "author": "dropkit",
   "deps": {
-    "python": ["docling", "Pillow"],
-    "mcp": ["awslabs.document-loader-mcp-server"]
-  },
+    "python": ["docling", "Pillow"]
+    },
   "input": {
     "arguments": "file path or glob pattern",
     "fileTypes": [".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".tiff", ".tif", ".bmp"]
