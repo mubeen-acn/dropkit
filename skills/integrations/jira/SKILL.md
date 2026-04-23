@@ -55,7 +55,7 @@ All keys may be overridden by matching environment variables.
   like `--token`, `--api-token`, and `--bearer` and exits with an error.
 - If credentials are missing or invalid, instruct the user to run
   `scripts/setup_credentials.sh` (macOS / Linux) or
-  `scripts/setup_credentials.ps1` (Windows) themselves — do not run it
+  `.\scripts\setup_credentials.ps1` (Windows) themselves — do not run it
   for them (it prompts interactively).
 
 ### Step 1: Verify the environment
@@ -75,7 +75,7 @@ python scripts/jira.py check
 - Exit code 0 → authenticated, proceed.
 - Exit code 2 → credentials missing or invalid.  Tell the user to run
   `bash scripts/setup_credentials.sh` (macOS / Linux) or
-  `pwsh scripts/setup_credentials.ps1` (Windows).  Interactive — they
+  `.\scripts\setup_credentials.ps1` (Windows).  Interactive — they
   run it, not you.  Stop here.
 
 ### Step 2: Dispatch to the right subcommand
@@ -288,7 +288,7 @@ python scripts/jira.py raw GET "issue/ACME-123/watchers"
   Ask the user to double-check the key.
 - **Token expired or revoked**: 401 Unauthorized.  Exit 2.  Tell the user
   to regenerate the token and re-run `setup_credentials.sh` (or
-  `setup_credentials.ps1` on Windows).
+  `.\scripts\setup_credentials.ps1` on Windows).
 - **Permission denied** (403): exit 2.  The token is valid but the user's
   Jira permissions don't cover the resource — relay the message.
 - **Transition not available**: the CLI prints available transitions.

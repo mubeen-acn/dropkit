@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $ConfigDir = if ($env:XDG_CONFIG_HOME) {
     Join-Path $env:XDG_CONFIG_HOME 'jira'
 } else {
-    Join-Path $HOME '.config' 'jira'
+    Join-Path (Join-Path $HOME '.config') 'jira'
 }
 $ConfigFile = Join-Path $ConfigDir 'credentials.env'
 
