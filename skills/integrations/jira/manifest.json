@@ -1,0 +1,32 @@
+{
+  "id": "jira",
+  "name": "Jira Client",
+  "version": "1.0.0",
+  "description": "Read, create, and update Jira issues (Cloud or Data Center) via the REST API. Supports searching with JQL, creating stories/tasks/bugs/epics, updating fields, transitioning status, adding comments, managing subtasks, generating acceptance criteria, and bulk export. Designed for non-technical users — translates natural language intent into the right API calls.",
+  "category": "integrations",
+  "tags": ["jira", "atlassian", "rest-api", "agile", "stories", "acceptance-criteria", "authenticated"],
+  "author": "dropkit",
+  "license": "MIT",
+  "deps": {
+    "pip": [
+      "httpx>=0.27",
+      "python-dotenv>=1.0"
+    ]
+  },
+  "input": {
+    "arguments": "a subcommand and its arguments (e.g., search \"project = ACME AND status = 'In Progress'\" --limit 20)",
+    "env": {
+      "JIRA_BASE_URL": "Base URL. Cloud: https://<site>.atlassian.net. Data Center: https://jira.corp.example.com",
+      "JIRA_USER_EMAIL": "Atlassian account email (Cloud only). Not needed for Data Center PAT auth.",
+      "JIRA_API_TOKEN": "Cloud: API token from id.atlassian.com. Data Center: Personal Access Token. Populated by setup_credentials.sh, never passed on CLI.",
+      "JIRA_FLAVOR": "Optional: cloud | datacenter (auto-detected from URL by default)"
+    }
+  },
+  "output": {
+    "fileTypes": [".json", ".jsonl", ".csv"],
+    "layout": "JSON to stdout by default; --output writes to a file in the chosen --format"
+  },
+  "targets": {
+    "default": { "file": "SKILL.md" }
+  }
+}
