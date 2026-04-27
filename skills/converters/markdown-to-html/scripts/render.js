@@ -25,9 +25,13 @@ try {
   marked = require('marked');
   hljs = require('highlight.js');
 } catch (e) {
+  // Resolve the skill directory so the install hint matches the user's
+  // actual layout (works whether the skill is checked out under
+  // dropkit/skills/... or copied into ~/.claude/skills/markdown-to-html/).
+  const skillDir = path.dirname(__dirname);
   console.error(
-    'error: missing dependency. Install with:\n' +
-    '  npm install marked highlight.js'
+    'error: missing dependency `marked` or `highlight.js`. Install with:\n' +
+    `  (cd "${skillDir}" && npm install)`
   );
   process.exit(1);
 }
@@ -46,18 +50,32 @@ const THEMES = {
 
 function parseArgs(argv) {
   const args = { theme: 'navy', mermaid: true };
+  const takesValue = new Set(['--output', '--title', '--subtitle', '--theme']);
   let i = 0;
   while (i < argv.length) {
     const a = argv[i];
-    if (a === '--output')        { args.output = argv[++i]; }
-    else if (a === '--title')    { args.title = argv[++i]; }
-    else if (a === '--subtitle') { args.subtitle = argv[++i]; }
-    else if (a === '--theme')    { args.theme = argv[++i]; }
-    else if (a === '--no-mermaid') { args.mermaid = false; }
-    else if (a === '-h' || a === '--help') { args.help = true; }
-    else if (!a.startsWith('--') && !args.input) { args.input = a; }
-    else { console.error(`error: unknown arg ${a}`); process.exit(1); }
-    i++;
+    if (takesValue.has(a)) {
+      const v = argv[i + 1];
+      if (v === undefined || v.startsWith('-')) {
+        console.error(`error: ${a} requires a value`);
+        process.exit(1);
+      }
+      if (a === '--output')        args.output = v;
+      else if (a === '--title')    args.title = v;
+      else if (a === '--subtitle') args.subtitle = v;
+      else if (a === '--theme')    args.theme = v;
+      i += 2;
+      continue;
+    }
+    if (a === '--no-mermaid') { args.mermaid = false; i++; continue; }
+    if (a === '-h' || a === '--help') { args.help = true; i++; continue; }
+    if (a.startsWith('-')) {
+      console.error(`error: unknown flag ${a}`);
+      process.exit(1);
+    }
+    if (!args.input) { args.input = a; i++; continue; }
+    console.error(`error: unexpected positional argument ${a}`);
+    process.exit(1);
   }
   return args;
 }
@@ -127,14 +145,14 @@ function buildSidebar(headings) {
     return '<p style="color:var(--muted);font-size:0.85rem">(no sections)</p>';
   }
   return headings.map(h =>
-    `<a class="nav-link ${h.tag}" href="#${h.id}">${h.text}</a>`
+    `<a class="nav-link ${h.tag}" href="#${h.id}">${escapeHtml(h.text)}</a>`
   ).join('\n      ');
 }
 
 function buildHeaderNav(headings) {
   // Top-level (h2) only, max 5 entries, no links if empty.
   const top = headings.filter(h => h.tag === 'h2').slice(0, 5);
-  return top.map(h => `<a href="#${h.id}">${h.text}</a>`).join(' ');
+  return top.map(h => `<a href="#${h.id}">${escapeHtml(h.text)}</a>`).join(' ');
 }
 
 // --- title detection ------------------------------------------------------
@@ -143,6 +161,34 @@ function detectTitle(html, fallback) {
   const m = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(html);
   if (m) return decodeEntities(stripTags(m[1])).trim();
   return fallback;
+}
+
+class Slugger {
+  constructor() { this.seen = {}; }
+  slug(text) {
+    const base = text.toLowerCase()
+      .replace(/<[^>]+>/g, '')
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    let s = base || 'section';
+    if (this.seen[s] !== undefined) {
+      this.seen[s]++;
+      s = `${s}-${this.seen[s]}`;
+    } else {
+      this.seen[s] = 0;
+    }
+    return s;
+  }
+}
+
+// Replace a {{key}} placeholder in a template using function-form
+// String#replace so the value can contain $&, $$, $', $` etc. without
+// being interpreted as a back-reference pattern.
+function stamp(template, key, value) {
+  const re = new RegExp('\\{\\{' + key + '\\}\\}', 'g');
+  return template.replace(re, () => value);
 }
 
 // --- main ----------------------------------------------------------------
@@ -188,25 +234,7 @@ function main() {
   };
 
   // Stable slug ids for h1/h2/h3.
-  const slugger = new (class {
-    constructor() { this.seen = {}; }
-    slug(text) {
-      const base = text.toLowerCase()
-        .replace(/<[^>]+>/g, '')
-        .replace(/[^a-z0-9\s-]/g, '')
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-      let s = base || 'section';
-      if (this.seen[s] !== undefined) {
-        this.seen[s]++;
-        s = `${s}-${this.seen[s]}`;
-      } else {
-        this.seen[s] = 0;
-      }
-      return s;
-    }
-  })();
+  const slugger = new Slugger();
 
   renderer.heading = function ({ tokens, depth }) {
     const inner = this.parser.parseInline(tokens);
@@ -228,7 +256,7 @@ function main() {
 
   const title = args.title || detectTitle(html, path.basename(inputPath));
   const subtitle = args.subtitle
-    ? `<span class="subtitle">${args.subtitle}</span>`
+    ? `<span class="subtitle">${escapeHtml(args.subtitle)}</span>`
     : '';
 
   const hasMermaid = args.mermaid && /<div class="mermaid">/.test(html);
@@ -239,22 +267,26 @@ function main() {
     ? `mermaid.initialize({ startOnLoad: true, theme: 'base', themeVariables: { primaryColor: '${THEMES[args.theme].mid}', primaryTextColor: '#ffffff', primaryBorderColor: '${THEMES[args.theme].dark}', lineColor: '#64748b', fontFamily: 'inherit' } });`
     : '';
 
-  // Stamp template
+  // Stamp template — use function-form replace (via stamp()) so values
+  // containing $&, $$, $', $` are not mis-interpreted as backref tokens.
+  // The rendered markdown body is the obvious risk: code blocks easily
+  // contain those sequences.
   const templatePath = path.join(__dirname, 'template.html');
   const template = fs.readFileSync(templatePath, 'utf-8');
   const palette = THEMES[args.theme];
-  const filled = template
-    .replace(/\{\{title\}\}/g, escapeHtml(title))
-    .replace(/\{\{header_subtitle\}\}/g, subtitle)
-    .replace(/\{\{header_nav\}\}/g, headerNav)
-    .replace(/\{\{sidebar\}\}/g, sidebar)
-    .replace(/\{\{content\}\}/g, html)
-    .replace(/\{\{footer\}\}/g, `<span>${escapeHtml(path.basename(inputPath))}</span>`)
-    .replace(/\{\{accent_dark\}\}/g, palette.dark)
-    .replace(/\{\{accent_mid\}\}/g, palette.mid)
-    .replace(/\{\{accent_light\}\}/g, palette.light)
-    .replace(/\{\{mermaid_script\}\}/g, mermaidScript)
-    .replace(/\{\{mermaid_init\}\}/g, mermaidInit);
+  const filled = [
+    ['title',            escapeHtml(title)],
+    ['header_subtitle',  subtitle],
+    ['header_nav',       headerNav],
+    ['sidebar',          sidebar],
+    ['content',          html],
+    ['footer',           `<span>${escapeHtml(path.basename(inputPath))}</span>`],
+    ['accent_dark',      palette.dark],
+    ['accent_mid',       palette.mid],
+    ['accent_light',     palette.light],
+    ['mermaid_script',   mermaidScript],
+    ['mermaid_init',     mermaidInit],
+  ].reduce((tpl, [k, v]) => stamp(tpl, k, v), template);
 
   fs.writeFileSync(outputPath, filled, 'utf-8');
   process.stdout.write(`OUTPUT: ${outputPath}\n`);

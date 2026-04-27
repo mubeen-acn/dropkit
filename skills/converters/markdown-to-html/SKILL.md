@@ -89,3 +89,9 @@ relevant.
   invent a sixth.
 - **Source contains a Mermaid block but you want fully offline output**:
   pass `--no-mermaid` and the diagram will fall back to a plain `<pre>`.
+- **Trust model**: the renderer assumes the input markdown is the user's
+  own document. Marked's default behavior is to pass through raw HTML
+  embedded in markdown (e.g., a `<script>` tag in a `.md` file lands in
+  the output as-is). This is fine for documents you authored; do not
+  use this skill to render markdown from untrusted sources without a
+  separate sanitization step.
