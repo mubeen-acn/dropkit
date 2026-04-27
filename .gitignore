@@ -11,5 +11,8 @@ __pycache__/
 *.egg-info/
 .venv/
 
+# Node
+node_modules/
+
 # Quickstart artifacts
 examples/processing/

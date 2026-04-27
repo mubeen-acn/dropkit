@@ -129,10 +129,21 @@ Documents go through Docling text extraction (`scripts/convert.py`). Images go t
 
 ### markdown-to-html
 
-Convert a Markdown file to styled HTML.
+Render a Markdown file to a self-contained, styled HTML page (sticky header, sidebar nav, syntax-highlighted code, callout boxes, Mermaid diagrams, print-ready). Deterministic — `marked` + `highlight.js` do the parsing; the agent only invokes the script.
 
-- **Install deps**: `npm install marked highlight.js`
-- **Example prompt**: *"Render notes/weekly.md as a self-contained HTML page with TOC."*
+- **Install deps**: `cd skills/converters/markdown-to-html && npm install`
+- **Verify the renderer**:
+
+  ```bash
+  node skills/converters/markdown-to-html/scripts/render.js examples/sample.md --output /tmp/sample.html
+  ```
+
+- **Example prompts**:
+  - *"Render notes/weekly.md as a self-contained HTML page with TOC."*
+  - *"Render docs/architecture.md to architecture.html with the green accent theme."*
+  - *"Render this for a fully offline environment — no internet allowed."* (uses `--no-mermaid`)
+
+Flags: `--output FILE`, `--title TEXT`, `--subtitle TEXT`, `--theme navy|green|teal|amber|rose`, `--no-mermaid`. Callouts are detected automatically from `**Note:**`, `**Tip:**`, `**Warning:**`, `**Important:**`, `**Stop:**` bold lead-ins; Mermaid blocks (` ```mermaid ` fences) pass through and the CDN script is auto-included only when at least one is present.
 
 ### msg-to-markdown
 
