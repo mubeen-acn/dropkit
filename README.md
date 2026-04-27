@@ -2,7 +2,7 @@
 
 Dropkit is a folder of agent playbooks. Each skill is a self-contained directory containing a `SKILL.md` (the agent reads this), a `scripts/` folder (deterministic tooling the agent calls), and a `manifest.json` (deps and I/O). Drop a directory into `~/.claude/skills/` (or your IDE's equivalent) and the skill is installed.
 
-Today the registry covers Atlassian integrations (Jira, Jira Align, Confluence space crawling), file-to-Markdown conversion (PDF, DOCX, XLSX, PPTX, images), Markdown-to-HTML rendering, Outlook `.msg` email conversion, OpenAPI 3.1 contract generation against the Zalando guidelines, and Kafka event schema generation. Heavier work (auth flows, retries, pagination, parsing, multipart uploads) lives in the `scripts/` of each skill, so the agent's job stays small: pick a subcommand, run it, relay the output.
+Today the registry covers Atlassian integrations (Jira, Jira Align, Confluence space crawling), file-to-Markdown conversion (PDF, DOCX, XLSX, PPTX, images), Markdown-to-HTML rendering, Outlook `.msg` email conversion, and OpenAPI 3.1 contract generation against the Zalando guidelines. Heavier work (auth flows, retries, pagination, parsing, multipart uploads) lives in the `scripts/` of each skill, so the agent's job stays small: pick a subcommand, run it, relay the output.
 
 ## Quickstart
 
@@ -21,7 +21,6 @@ For a working skill in your IDE, jump to **[Installing a skill into your IDE](#i
 | Skill | Category | Purpose | Deps |
 |---|---|---|---|
 | [api-contract](skills/contracts/api-contract/) | contracts | Generate OpenAPI 3.1 contracts from natural language, code, or SQL, enforcing 138 Zalando RESTful API Guidelines rules. | none |
-| [kafka-event-schema](skills/contracts/kafka-event-schema/) | contracts | Generate Avro, JSON Schema, or Protobuf event schemas with metadata envelopes, compatibility rules, and Schema Registry integration. | none |
 | [file-to-markdown](skills/converters/file-to-markdown/) | converters | Convert documents (PDF, DOCX, PPTX, XLSX, XLS) and images (PNG, JPG, TIFF, BMP, WEBP, GIF) to Markdown. Documents use Docling for text extraction; images use a two-pass sliding-window vision strategy. | pip `docling`, `Pillow` |
 | [markdown-to-html](skills/converters/markdown-to-html/) | converters | Convert Markdown to styled, self-contained HTML with syntax highlighting, TOC, and responsive layout. | npm `marked`, `highlight.js` |
 | [msg-to-markdown](skills/converters/msg-to-markdown/) | converters | Convert Outlook `.msg` emails to structured Markdown preserving headers, body, and attachment metadata. | npm `@nicecode/msg-reader` |
@@ -114,14 +113,6 @@ Generate an OpenAPI 3.1 contract.
 - **Input**: natural language description, or a path to source code / SQL that describes the API surface.
 - **Output**: `.yaml` or `.json` OpenAPI document.
 - **Example prompt**: *"Generate an OpenAPI contract for a users CRUD API with pagination and idempotent POST."*
-
-### kafka-event-schema
-
-Generate a Kafka event schema (Avro / JSON Schema / Protobuf).
-
-- **Input**: event description, or path to existing schema / source code.
-- **Output**: `.avsc`, `.json`, `.proto`, or `.yaml` (AsyncAPI).
-- **Example prompt**: *"Generate an Avro schema for an OrderPlaced event with a standard metadata envelope."*
 
 ### file-to-markdown
 
