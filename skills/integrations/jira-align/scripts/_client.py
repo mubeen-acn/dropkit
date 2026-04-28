@@ -26,7 +26,6 @@ import httpx
 log = logging.getLogger("jira_align.client")
 
 DEFAULT_CONCURRENCY = 4
-DEFAULT_MIN_DELAY_MS = 100
 DEFAULT_TIMEOUT_S = 30.0
 MAX_RETRIES = 5
 PAGE_SIZE_MAX = 100  # Jira Align caps $top at 100 per call.
@@ -71,7 +70,6 @@ class JiraAlignClient:
         credentials: Credentials,
         *,
         concurrency: int = DEFAULT_CONCURRENCY,
-        min_delay_ms: int = DEFAULT_MIN_DELAY_MS,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         verify_tls: bool = True,
     ) -> None:
@@ -95,10 +93,10 @@ class JiraAlignClient:
             verify=verify_tls,
             follow_redirects=True,
         )
+        # Concurrency is gated by the semaphore alone. Throttling for
+        # rate-limited endpoints comes from the API's own 429 + Retry-After
+        # response, which the request loop honors.
         self._sem = asyncio.Semaphore(concurrency)
-        self._min_delay = min_delay_ms / 1000.0
-        self._last_request = 0.0
-        self._lock = asyncio.Lock()
 
     async def __aenter__(self) -> "JiraAlignClient":
         return self
@@ -123,13 +121,6 @@ class JiraAlignClient:
         json_body: Any | None = None,
     ) -> httpx.Response:
         async with self._sem:
-            async with self._lock:
-                now = asyncio.get_running_loop().time()
-                wait = self._min_delay - (now - self._last_request)
-                if wait > 0:
-                    await asyncio.sleep(wait)
-                self._last_request = asyncio.get_running_loop().time()
-
             last_exc: Exception | None = None
             for attempt in range(MAX_RETRIES):
                 try:
@@ -321,19 +312,23 @@ class JiraAlignClient:
 
 
 def _extract_items(payload: Any) -> list[dict]:
-    """Jira Align list responses have varied over versions. Normalize to a
-    plain list of dicts."""
+    """Normalize a Jira Align list response to a plain list of dicts.
+
+    Jira Align REST API 2.0 follows OData and returns either:
+      - a bare JSON array (some endpoints), or
+      - an OData envelope ``{"value": [...]}`` with optional metadata
+        keys (``@odata.count``, ``@odata.nextLink``).
+
+    We pin to those two shapes. If a response doesn't match, the
+    iterator stops (logging the unexpected shape would leak payloads,
+    so we fail closed instead).
+    """
     if isinstance(payload, list):
         return [x for x in payload if isinstance(x, dict)]
     if isinstance(payload, dict):
-        for key in ("items", "value", "results", "data"):
-            inner = payload.get(key)
-            if isinstance(inner, list):
-                return [x for x in inner if isinstance(x, dict)]
-        # Some single-resource responses still come back as a dict; treat as
-        # a one-element collection so callers can iterate uniformly.
-        if any(k in payload for k in ("id", "ID", "Id")):
-            return [payload]
+        inner = payload.get("value")
+        if isinstance(inner, list):
+            return [x for x in inner if isinstance(x, dict)]
     return []
 
 

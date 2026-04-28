@@ -1,9 +1,18 @@
-# Ignore OS files
+# OS files
 .DS_Store
-<<<<<<< main
 
 # Claude Code
 CLAUDE.md
 .claude/
-=======
->>>>>>> main
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Node
+node_modules/
+
+# Quickstart artifacts
+examples/processing/

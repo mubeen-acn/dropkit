@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""Jira REST API CLI (Cloud v3 + Data Center v2).
+"""Jira REST API CLI (Atlassian Cloud v3 + Server / Data Center v2).
 
 Subcommands:
-    check                          Verify credentials and reachability.
-    whoami                         Print the authenticated user record.
-    get ISSUE_KEY                  Fetch a single issue (e.g. ``get PROJ-123``).
-    search JQL                     Search issues with JQL, paginated.
-    list-projects                  List accessible projects.
-    list-transitions ISSUE_KEY     Show available workflow transitions.
-    list-fields                    List all fields (useful for custom field names).
-    create PROJECT_KEY ISSUE_TYPE  Create an issue with --field / --data-file.
-    update ISSUE_KEY               Update fields on an existing issue.
-    transition ISSUE_KEY STATUS    Move issue through its workflow.
-    comment ISSUE_KEY TEXT         Add a comment to an issue.
-    add-subtask PARENT_KEY SUMMARY Create a sub-task under a parent issue.
-    export JQL                     Bulk export matching issues.
-    raw METHOD PATH                Arbitrary API call for anything not wrapped.
+    check               Verify credentials and reachability.
+    whoami              Print the authenticated user record.
 
-The Jira API token is never accepted on the command line.  It is read only
-from the shared jira credential file or environment.
+    # Issues
+    get-issue KEY                Fetch an issue.
+    create-issue                 POST /issue with body from --field/--data-file.
+    update-issue KEY             PUT /issue/{KEY} (partial; only listed fields).
+    delete-issue KEY --yes       Delete an issue (irreversible).
+    transition KEY               Apply a workflow transition by name or id.
+    list-transitions KEY         Show available transitions for an issue.
+    comment KEY --body TEXT      Add a comment.
+    attach KEY --file PATH       Upload an attachment.
+
+    # Search
+    search "JQL"                 JQL search with auto-pagination.
+
+    # Projects
+    get-project KEY              Fetch a project.
+    list-projects                Paginate /project/search.
+
+    # Users
+    get-user                     Cloud: --account-id; Server: --username/--key.
+    list-users --query Q         Search users.
+
+    # Escape hatch
+    raw METHOD PATH              Arbitrary request when nothing above fits.
+
+The Jira API token / PAT is never accepted on the command line. It is
+read only from the shared dropkit credential file or environment.
 """
 from __future__ import annotations
 
@@ -31,6 +43,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Allow ``python scripts/jira.py`` to import the sibling _client module
+# regardless of cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _client import (  # noqa: E402
@@ -38,7 +52,6 @@ from _client import (  # noqa: E402
     JiraClient,
     JiraError,
     load_credentials,
-    FLAVOR_CLOUD,
 )
 
 log = logging.getLogger("jira.cli")
@@ -50,135 +63,193 @@ EXIT_SERVER_ERROR = 3
 
 TOKEN_CLI_FLAGS = frozenset({
     "--token", "--api-token", "--bearer", "-t",
-    "--jira-token", "--jira-api-token", "--password",
+    "--jira-token", "--pat",
 })
 
 
 def _reject_token_on_cli(argv: list[str]) -> None:
+    """Jira tokens / PATs are secret; refuse to accept them as CLI args."""
     for arg in argv:
         head = arg.split("=", 1)[0]
         if head in TOKEN_CLI_FLAGS:
             sys.stderr.write(
-                "error: API tokens must not be passed on the command line.  "
-                "Run scripts/setup_credentials.sh or export JIRA_API_TOKEN.\n"
+                "error: API tokens must not be passed on the command line. "
+                "Run scripts/setup_credentials.sh or export "
+                "JIRA_API_TOKEN.\n"
             )
             sys.exit(EXIT_USER_ERROR)
 
 
-# ---- Argument parser --------------------------------------------------------
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="jira.py",
-        description="Query Jira REST API (Cloud v3 / Data Center v2).",
+        description="Query the Jira REST API (Cloud v3 or Server/DC v2).",
     )
     p.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     p.add_argument(
-        "--insecure", action="store_true",
-        help="Disable TLS verification.  Only if the user explicitly asks.",
+        "--insecure",
+        action="store_true",
+        help="Disable TLS verification. Only if the user explicitly asks.",
     )
     p.add_argument(
-        "--format", choices=("json", "jsonl", "csv"), default="json",
+        "--format",
+        choices=("json", "jsonl", "csv"),
+        default="json",
         help="Output format (default: json).",
     )
     p.add_argument(
-        "--output", type=Path, default=None,
+        "--output",
+        type=Path,
+        default=None,
         help="Write output to this file instead of stdout.",
     )
 
     sub = p.add_subparsers(dest="command", required=True)
 
-    # -- check / whoami -------------------------------------------------------
     sub.add_parser("check", help="Verify credentials and reachability.")
     sub.add_parser("whoami", help="Show the authenticated user record.")
 
-    # -- get ------------------------------------------------------------------
-    g = sub.add_parser("get", help="Fetch a single issue by key.")
-    g.add_argument("issue_key", help="Issue key, e.g. PROJ-123.")
-    g.add_argument("--fields", default=None, help="Comma-separated field list.")
-    g.add_argument("--expand", default=None, help="Comma-separated expand list.")
+    # --- issues ---
+    gi = sub.add_parser("get-issue", help="Fetch a single issue.")
+    gi.add_argument("issue_key", help="Issue key (e.g. PROJ-123) or numeric id.")
+    gi.add_argument("--fields", default=None,
+                    help="Comma-separated field list (e.g. summary,status). "
+                         "Use *all for everything, -comment to exclude.")
+    gi.add_argument("--expand", default=None,
+                    help="Comma-separated expand list "
+                         "(renderedFields, names, schema, transitions, ...).")
 
-    # -- search ---------------------------------------------------------------
-    s = sub.add_parser("search", help="Search issues with JQL.")
-    s.add_argument("jql", help="JQL query string.")
-    s.add_argument("--fields", default=None, help="Comma-separated field list.")
-    s.add_argument("--expand", default=None, help="Comma-separated expand list.")
-    s.add_argument("--limit", type=int, default=None, help="Max issues to return.")
-    s.add_argument("--page-size", type=int, default=50, help="Issues per request.")
+    ci = sub.add_parser("create-issue", help="Create a new issue.")
+    _add_body_flags(ci)
 
-    # -- list-projects --------------------------------------------------------
-    sub.add_parser("list-projects", help="List accessible projects.")
+    ui = sub.add_parser("update-issue", help="Partially update an issue (PUT).")
+    ui.add_argument("issue_key")
+    ui.add_argument("--no-notify", action="store_true",
+                    help="Suppress the watcher notification email.")
+    _add_body_flags(ui)
 
-    # -- list-transitions -----------------------------------------------------
-    lt = sub.add_parser("list-transitions", help="Show available transitions.")
-    lt.add_argument("issue_key", help="Issue key.")
+    di = sub.add_parser("delete-issue", help="Delete an issue (irreversible).")
+    di.add_argument("issue_key")
+    di.add_argument("--delete-subtasks", action="store_true",
+                    help="Also delete subtasks (otherwise the call 400s).")
+    di.add_argument("--yes", action="store_true",
+                    help="Required confirmation flag.")
 
-    # -- list-fields ----------------------------------------------------------
-    sub.add_parser("list-fields", help="List all fields (system + custom).")
+    tr = sub.add_parser("transition", help="Apply a workflow transition.")
+    tr.add_argument("issue_key")
+    g = tr.add_mutually_exclusive_group(required=True)
+    g.add_argument("--to", dest="transition_name",
+                   help="Transition name (e.g. 'Done'). Resolved to id.")
+    g.add_argument("--id", dest="transition_id",
+                   help="Transition id from list-transitions.")
+    tr.add_argument("--field", action="append", default=[], metavar="KEY=VALUE",
+                    help="Field to set during the transition (repeatable). "
+                         "JSON-parsed if possible, else string.")
 
-    # -- create ---------------------------------------------------------------
-    cr = sub.add_parser("create", help="Create an issue.")
-    cr.add_argument("project_key", help="Project key, e.g. ACME.")
-    cr.add_argument("issue_type", help="Issue type: Story, Task, Bug, Epic, Sub-task.")
-    _add_body_flags(cr)
+    lt = sub.add_parser("list-transitions",
+                        help="Show available transitions for an issue.")
+    lt.add_argument("issue_key")
 
-    # -- update ---------------------------------------------------------------
-    up = sub.add_parser("update", help="Update fields on an existing issue.")
-    up.add_argument("issue_key", help="Issue key.")
-    _add_body_flags(up)
-
-    # -- transition -----------------------------------------------------------
-    tr = sub.add_parser("transition", help="Transition an issue to a new status.")
-    tr.add_argument("issue_key", help="Issue key.")
-    tr.add_argument("status", help="Target status name (e.g. 'In Progress', 'Done').")
-
-    # -- comment --------------------------------------------------------------
     cm = sub.add_parser("comment", help="Add a comment to an issue.")
-    cm.add_argument("issue_key", help="Issue key.")
-    cm.add_argument("text", help="Comment text.")
+    cm.add_argument("issue_key")
+    cm.add_argument("--body", required=True, help="Comment text. Plain string; "
+                    "wrapped to ADF on Cloud automatically.")
 
-    # -- add-subtask ----------------------------------------------------------
-    st = sub.add_parser("add-subtask", help="Create a sub-task under a parent.")
-    st.add_argument("parent_key", help="Parent issue key.")
-    st.add_argument("summary", help="Sub-task summary.")
-    _add_body_flags(st)
+    at = sub.add_parser("attach", help="Upload an attachment.")
+    at.add_argument("issue_key")
+    at.add_argument("--file", dest="file_path", required=True, type=Path,
+                    help="Local file path to upload.")
 
-    # -- export ---------------------------------------------------------------
-    ex = sub.add_parser("export", help="Bulk export issues matching a JQL query.")
-    ex.add_argument("jql", help="JQL query string.")
-    ex.add_argument("--fields", default=None, help="Comma-separated field list.")
-    ex.add_argument("--limit", type=int, default=None, help="Max issues.")
-    ex.add_argument("--page-size", type=int, default=50, help="Issues per request.")
+    # --- search ---
+    sr = sub.add_parser("search", help="JQL search with auto-pagination.")
+    sr.add_argument("jql", help="JQL expression, quoted.")
+    sr.add_argument("--fields", default=None,
+                    help="Comma-separated field list.")
+    sr.add_argument("--expand", default=None,
+                    help="Comma-separated expand list.")
+    sr.add_argument("--limit", type=int, default=None,
+                    help="Total max issues across all pages (default: all).")
+    sr.add_argument("--page-size", type=int, default=50,
+                    help="Issues per request (max 100).")
 
-    # -- raw ------------------------------------------------------------------
-    rw = sub.add_parser("raw", help="Issue an arbitrary API request.")
+    # --- projects ---
+    gp = sub.add_parser("get-project", help="Fetch a project.")
+    gp.add_argument("key_or_id", help="Project key (PROJ) or numeric id.")
+
+    lp = sub.add_parser("list-projects", help="Paginate /project/search.")
+    lp.add_argument("--query", default=None,
+                    help="Optional substring filter on project name/key.")
+    lp.add_argument("--limit", type=int, default=None)
+    lp.add_argument("--page-size", type=int, default=50)
+
+    # --- users ---
+    gu = sub.add_parser("get-user", help="Fetch a user record.")
+    gu.add_argument("--account-id", default=None,
+                    help="Cloud lookup: 24-char accountId.")
+    gu.add_argument("--username", default=None,
+                    help="Server/DC lookup: username.")
+    gu.add_argument("--key", default=None,
+                    help="Server/DC lookup: user key (legacy).")
+
+    lu = sub.add_parser("list-users", help="Search users.")
+    lu.add_argument("--query", required=True,
+                    help="Cloud: name/email substring. Server: username substring.")
+    lu.add_argument("--limit", type=int, default=None)
+    lu.add_argument("--page-size", type=int, default=50)
+
+    # --- raw ---
+    rw = sub.add_parser("raw", help="Issue an arbitrary request.")
     rw.add_argument(
-        "method", choices=("GET", "POST", "PUT", "PATCH", "DELETE"),
+        "method",
+        choices=("GET", "POST", "PUT", "PATCH", "DELETE"),
         help="HTTP method.",
     )
-    rw.add_argument("path", help="API path (absolute or relative to API prefix).")
     rw.add_argument(
-        "--param", action="append", default=[], metavar="KEY=VALUE",
+        "path",
+        help=(
+            "Path. Absolute (/rest/api/3/...) or relative to the API "
+            "prefix (e.g. 'issue/PROJ-1/worklog')."
+        ),
+    )
+    rw.add_argument(
+        "--param",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
         help="Query parameter (repeatable).",
     )
     rw.add_argument(
-        "--data-file", type=Path, default=None,
-        help="JSON file to send as the request body.",
+        "--data-file",
+        type=Path,
+        default=None,
+        help="Path to a JSON file to send as the request body.",
     )
 
     return p
 
 
 def _add_body_flags(sub: argparse.ArgumentParser) -> None:
+    """Body-source flags for create-issue / update-issue."""
     sub.add_argument(
-        "--data-file", type=Path, default=None,
-        help="Path to a JSON file containing the fields payload.",
+        "--data-file",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON file containing the request body. The body may "
+            "be a flat fields dict or already wrapped as {\"fields\": {...}}."
+        ),
     )
     sub.add_argument(
-        "--field", action="append", default=[], metavar="KEY=VALUE",
+        "--field",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
         help=(
-            "Field to set (repeatable).  VALUE is parsed as JSON if possible, "
-            "otherwise sent as a string.  Merges over --data-file."
+            "Field to include in the body (repeatable). VALUE is parsed as "
+            "JSON if possible (numbers, true/false, null, arrays, objects), "
+            "otherwise sent as a string. Merges over --data-file. "
+            "Examples: --field summary=\"...\" --field "
+            "project='{\"key\":\"PROJ\"}' --field labels='[\"a\",\"b\"]'."
         ),
     )
 
@@ -198,47 +269,33 @@ def _parse_field_pairs(pairs: list[str]) -> dict[str, Any]:
     return out
 
 
-def _load_fields(args: argparse.Namespace) -> dict[str, Any]:
-    fields: dict[str, Any] = {}
-    if getattr(args, "data_file", None) is not None:
+def _load_body(args: argparse.Namespace) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    if args.data_file is not None:
         raw = json.loads(args.data_file.read_text("utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("--data-file must contain a JSON object")
-        fields.update(raw)
-    fields.update(_parse_field_pairs(args.field))
-    return fields
+        body.update(raw)
+    overrides = _parse_field_pairs(args.field)
+    if overrides:
+        # If the loaded body is already wrapped ({"fields": {...}} — as Jira's
+        # own create / update payloads are), merge --field overrides INTO
+        # body["fields"]. Merging at the top level would leave both
+        # body["fields"]["summary"] and body["summary"] populated, which
+        # the API would either silently drop or 400 on.
+        if any(k in body for k in ("fields", "update", "transition")):
+            existing_fields = dict(body.get("fields") or {})
+            existing_fields.update(overrides)
+            body["fields"] = existing_fields
+        else:
+            body.update(overrides)
+    if not body:
+        raise ValueError("no body provided — pass --data-file or --field")
+    return body
 
 
-# ---- ADF helpers (Cloud v3 uses Atlassian Document Format) ------------------
+# --- command implementations ----------------------------------------------
 
-def _text_to_adf(text: str) -> dict:
-    """Wrap plain text in a minimal ADF document for Cloud v3."""
-    return {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            {
-                "type": "paragraph",
-                "content": [{"type": "text", "text": text}],
-            }
-        ],
-    }
-
-
-def _make_comment_body(text: str, flavor: str) -> Any:
-    """Cloud v3 expects ADF; Data Center v2 expects a plain string."""
-    if flavor == FLAVOR_CLOUD:
-        return _text_to_adf(text)
-    return text
-
-
-def _make_description(text: str, flavor: str) -> Any:
-    if flavor == FLAVOR_CLOUD:
-        return _text_to_adf(text)
-    return text
-
-
-# ---- Subcommand handlers ----------------------------------------------------
 
 async def _cmd_check(client: JiraClient) -> int:
     try:
@@ -249,9 +306,15 @@ async def _cmd_check(client: JiraClient) -> int:
     except JiraError as exc:
         print(f"server error: {exc}", file=sys.stderr)
         return EXIT_SERVER_ERROR
-    display = info.get("displayName") or info.get("name") or "?"
-    email = info.get("emailAddress") or ""
-    print(f"ok: connected to {client.base_url} as {display} {email}".rstrip())
+    name = (
+        info.get("displayName")
+        or info.get("name")
+        or info.get("emailAddress")
+        or "?"
+    )
+    print(
+        f"ok: connected to {client.base_url} ({client.flavor}) as {name}"
+    )
     return EXIT_OK
 
 
@@ -261,7 +324,7 @@ async def _cmd_whoami(client: JiraClient, writer: "OutputWriter") -> int:
     return EXIT_OK
 
 
-async def _cmd_get(
+async def _cmd_get_issue(
     client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
 ) -> int:
     issue = await client.get_issue(
@@ -271,9 +334,106 @@ async def _cmd_get(
     return EXIT_OK
 
 
+async def _cmd_create_issue(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    try:
+        body = _load_body(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    result = await client.create_issue(body)
+    writer.emit_single(result if isinstance(result, dict) else {"value": result})
+    return EXIT_OK
+
+
+async def _cmd_update_issue(
+    client: JiraClient, args: argparse.Namespace
+) -> int:
+    try:
+        body = _load_body(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    await client.update_issue(
+        args.issue_key, body, notify_users=not args.no_notify
+    )
+    print(f"ok: updated {args.issue_key}", file=sys.stderr)
+    return EXIT_OK
+
+
+async def _cmd_delete_issue(
+    client: JiraClient, args: argparse.Namespace
+) -> int:
+    if not args.yes:
+        print(
+            "error: delete is destructive — pass --yes to confirm.",
+            file=sys.stderr,
+        )
+        return EXIT_USER_ERROR
+    await client.delete_issue(
+        args.issue_key, delete_subtasks=args.delete_subtasks
+    )
+    print(f"ok: deleted {args.issue_key}", file=sys.stderr)
+    return EXIT_OK
+
+
+async def _cmd_list_transitions(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    transitions = await client.list_transitions(args.issue_key)
+    for t in transitions:
+        writer.emit_record(t)
+    writer.finish()
+    return EXIT_OK
+
+
+async def _cmd_transition(
+    client: JiraClient, args: argparse.Namespace
+) -> int:
+    try:
+        fields = _parse_field_pairs(args.field) if args.field else None
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    await client.transition_issue(
+        args.issue_key,
+        transition_id=args.transition_id,
+        transition_name=args.transition_name,
+        fields=fields,
+    )
+    label = args.transition_name or args.transition_id
+    print(f"ok: transitioned {args.issue_key} → {label}", file=sys.stderr)
+    return EXIT_OK
+
+
+async def _cmd_comment(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    result = await client.add_comment(args.issue_key, args.body)
+    writer.emit_single(result if isinstance(result, dict) else {"value": result})
+    return EXIT_OK
+
+
+async def _cmd_attach(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    if not args.file_path.is_file():
+        print(f"error: file not found: {args.file_path}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    results = await client.add_attachment(args.issue_key, args.file_path)
+    for r in results:
+        writer.emit_record(r)
+    writer.finish()
+    return EXIT_OK
+
+
 async def _cmd_search(
     client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
 ) -> int:
+    if args.page_size <= 0 or args.page_size > 100:
+        print("error: --page-size must be 1..100", file=sys.stderr)
+        return EXIT_USER_ERROR
     async for issue in client.iter_search(
         args.jql,
         fields=args.fields,
@@ -286,170 +446,48 @@ async def _cmd_search(
     return EXIT_OK
 
 
+async def _cmd_get_project(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    proj = await client.get_project(args.key_or_id)
+    writer.emit_single(proj)
+    return EXIT_OK
+
+
 async def _cmd_list_projects(
-    client: JiraClient, writer: "OutputWriter"
-) -> int:
-    projects = await client.list_projects()
-    for p in projects:
-        writer.emit_record(p)
-    writer.finish()
-    return EXIT_OK
-
-
-async def _cmd_list_transitions(
     client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
 ) -> int:
-    transitions = await client.get_transitions(args.issue_key)
-    for t in transitions:
-        writer.emit_record(t)
-    writer.finish()
-    return EXIT_OK
-
-
-async def _cmd_list_fields(
-    client: JiraClient, writer: "OutputWriter"
-) -> int:
-    fields = await client.list_fields()
-    for f in fields:
-        writer.emit_record(f)
-    writer.finish()
-    return EXIT_OK
-
-
-async def _cmd_create(
-    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
-) -> int:
-    user_fields = _load_fields(args)
-    if not user_fields and not getattr(args, "data_file", None):
-        print(
-            "error: no fields provided — pass --field or --data-file",
-            file=sys.stderr,
-        )
-        return EXIT_USER_ERROR
-
-    # Build the Jira create payload.
-    fields_payload: dict[str, Any] = {
-        "project": {"key": args.project_key},
-        "issuetype": {"name": args.issue_type},
-    }
-
-    # Map flat --field keys to Jira's nested structure where needed.
-    for k, v in user_fields.items():
-        if k == "description" and isinstance(v, str):
-            fields_payload[k] = _make_description(v, client.flavor)
-        else:
-            fields_payload[k] = v
-
-    body: dict[str, Any] = {"fields": fields_payload}
-    result = await client.create_issue(body)
-    writer.emit_single(result)
-    return EXIT_OK
-
-
-async def _cmd_update(
-    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
-) -> int:
-    user_fields = _load_fields(args)
-    if not user_fields:
-        print(
-            "error: no fields provided — pass --field or --data-file",
-            file=sys.stderr,
-        )
-        return EXIT_USER_ERROR
-
-    update_payload: dict[str, Any] = {}
-    for k, v in user_fields.items():
-        if k == "description" and isinstance(v, str):
-            update_payload[k] = _make_description(v, client.flavor)
-        else:
-            update_payload[k] = v
-
-    await client.update_issue(args.issue_key, {"fields": update_payload})
-    print(f"ok: updated {args.issue_key}", file=sys.stderr)
-    # Fetch the updated issue to show the result.
-    issue = await client.get_issue(args.issue_key)
-    writer.emit_single(issue)
-    return EXIT_OK
-
-
-async def _cmd_transition(
-    client: JiraClient, args: argparse.Namespace
-) -> int:
-    transitions = await client.get_transitions(args.issue_key)
-    target = args.status.strip().lower()
-
-    match = None
-    for t in transitions:
-        if t.get("name", "").strip().lower() == target:
-            match = t
-            break
-
-    if match is None:
-        available = ", ".join(
-            f"\"{t.get('name')}\" (id {t.get('id')})" for t in transitions
-        )
-        print(
-            f"error: status \"{args.status}\" is not available for "
-            f"{args.issue_key}.  Available transitions: {available}",
-            file=sys.stderr,
-        )
-        return EXIT_USER_ERROR
-
-    await client.transition_issue(args.issue_key, match["id"])
-    print(
-        f"ok: transitioned {args.issue_key} → {match['name']}",
-        file=sys.stderr,
-    )
-    return EXIT_OK
-
-
-async def _cmd_comment(
-    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
-) -> int:
-    body = _make_comment_body(args.text, client.flavor)
-    result = await client.add_comment(args.issue_key, body)
-    writer.emit_single(result)
-    return EXIT_OK
-
-
-async def _cmd_add_subtask(
-    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
-) -> int:
-    extra_fields = _load_fields(args)
-
-    fields_payload: dict[str, Any] = {
-        "parent": {"key": args.parent_key},
-        "issuetype": {"name": "Sub-task"},
-        "summary": args.summary,
-    }
-
-    # Inherit the parent's project.
-    parent = await client.get_issue(args.parent_key, fields="project")
-    project_key = parent.get("fields", {}).get("project", {}).get("key")
-    if project_key:
-        fields_payload["project"] = {"key": project_key}
-
-    for k, v in extra_fields.items():
-        if k == "description" and isinstance(v, str):
-            fields_payload[k] = _make_description(v, client.flavor)
-        else:
-            fields_payload[k] = v
-
-    result = await client.create_issue({"fields": fields_payload})
-    writer.emit_single(result)
-    return EXIT_OK
-
-
-async def _cmd_export(
-    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
-) -> int:
-    async for issue in client.iter_search(
-        args.jql,
-        fields=args.fields,
-        page_size=args.page_size,
-        limit=args.limit,
+    async for proj in client.iter_projects(
+        query=args.query, page_size=args.page_size, limit=args.limit
     ):
-        writer.emit_record(issue)
+        writer.emit_record(proj)
+    writer.finish()
+    return EXIT_OK
+
+
+async def _cmd_get_user(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    if not (args.account_id or args.username or args.key):
+        print(
+            "error: provide --account-id (cloud) or --username/--key (server).",
+            file=sys.stderr,
+        )
+        return EXIT_USER_ERROR
+    user = await client.get_user(
+        account_id=args.account_id, username=args.username, key=args.key
+    )
+    writer.emit_single(user)
+    return EXIT_OK
+
+
+async def _cmd_list_users(
+    client: JiraClient, args: argparse.Namespace, writer: "OutputWriter"
+) -> int:
+    async for user in client.iter_users(
+        args.query, page_size=args.page_size, limit=args.limit
+    ):
+        writer.emit_record(user)
     writer.finish()
     return EXIT_OK
 
@@ -483,7 +521,8 @@ async def _cmd_raw(
     return EXIT_OK
 
 
-# ---- Output writer ----------------------------------------------------------
+# --- output writer ---------------------------------------------------------
+
 
 class OutputWriter:
     """Streams records in json / jsonl / csv."""
@@ -497,6 +536,8 @@ class OutputWriter:
         self._close = output is not None
         self._buffer: list[dict] = []
         self._csv_writer: csv.DictWriter | None = None
+        self._csv_fields: set[str] = set()
+        self._csv_warned: set[str] = set()
 
     def emit_single(self, record: dict) -> None:
         if self._fmt == "json":
@@ -516,12 +557,13 @@ class OutputWriter:
             self._write_csv_row(record)
 
     def finish(self) -> None:
-        if self._fmt == "json" and self._buffer:
+        if self._fmt == "json":
             json.dump(self._buffer, self._fh, indent=2, default=str)
             self._fh.write("\n")
 
     def _write_csv_row(self, record: dict) -> None:
         if self._csv_writer is None:
+            self._csv_fields = set(record.keys())
             self._csv_writer = csv.DictWriter(
                 self._fh,
                 fieldnames=list(record.keys()),
@@ -529,6 +571,24 @@ class OutputWriter:
                 quoting=csv.QUOTE_MINIMAL,
             )
             self._csv_writer.writeheader()
+        else:
+            # Warn (once per key) when a row has keys that aren't in the
+            # CSV header. DictWriter with extrasaction="ignore" will
+            # silently drop them, which is silent data loss the user
+            # needs to know about. Cleanly switching to a wider header
+            # mid-stream isn't possible in CSV; the user should rerun
+            # with --format jsonl or pass --fields to pin the schema.
+            extras = set(record.keys()) - self._csv_fields - self._csv_warned
+            if extras:
+                self._csv_warned |= extras
+                print(
+                    f"warning: CSV header was fixed from the first row; "
+                    f"these keys appear in later rows and will be omitted: "
+                    f"{', '.join(sorted(extras))}. Use --format jsonl for "
+                    f"a complete export, or pass --fields to pin the "
+                    f"schema explicitly.",
+                    file=sys.stderr,
+                )
         self._csv_writer.writerow(
             {k: _csv_scalar(v) for k, v in record.items()}
         )
@@ -546,7 +606,8 @@ def _csv_scalar(value: Any) -> str:
     return json.dumps(value, default=str)
 
 
-# ---- Dispatch ---------------------------------------------------------------
+# --- entrypoint ------------------------------------------------------------
+
 
 async def _run(args: argparse.Namespace) -> int:
     try:
@@ -565,28 +626,32 @@ async def _run(args: argparse.Namespace) -> int:
                 return await _cmd_check(client)
             if cmd == "whoami":
                 return await _cmd_whoami(client, writer)
-            if cmd == "get":
-                return await _cmd_get(client, args, writer)
-            if cmd == "search":
-                return await _cmd_search(client, args, writer)
-            if cmd == "list-projects":
-                return await _cmd_list_projects(client, writer)
+            if cmd == "get-issue":
+                return await _cmd_get_issue(client, args, writer)
+            if cmd == "create-issue":
+                return await _cmd_create_issue(client, args, writer)
+            if cmd == "update-issue":
+                return await _cmd_update_issue(client, args)
+            if cmd == "delete-issue":
+                return await _cmd_delete_issue(client, args)
             if cmd == "list-transitions":
                 return await _cmd_list_transitions(client, args, writer)
-            if cmd == "list-fields":
-                return await _cmd_list_fields(client, writer)
-            if cmd == "create":
-                return await _cmd_create(client, args, writer)
-            if cmd == "update":
-                return await _cmd_update(client, args, writer)
             if cmd == "transition":
                 return await _cmd_transition(client, args)
             if cmd == "comment":
                 return await _cmd_comment(client, args, writer)
-            if cmd == "add-subtask":
-                return await _cmd_add_subtask(client, args, writer)
-            if cmd == "export":
-                return await _cmd_export(client, args, writer)
+            if cmd == "attach":
+                return await _cmd_attach(client, args, writer)
+            if cmd == "search":
+                return await _cmd_search(client, args, writer)
+            if cmd == "get-project":
+                return await _cmd_get_project(client, args, writer)
+            if cmd == "list-projects":
+                return await _cmd_list_projects(client, args, writer)
+            if cmd == "get-user":
+                return await _cmd_get_user(client, args, writer)
+            if cmd == "list-users":
+                return await _cmd_list_users(client, args, writer)
             if cmd == "raw":
                 return await _cmd_raw(client, args, writer)
             print(f"error: unknown command {cmd!r}", file=sys.stderr)

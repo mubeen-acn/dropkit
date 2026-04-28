@@ -1,27 +1,31 @@
 # dropkit
 
-A portable registry of AI skills and agents. Install into Claude Code, Kiro, Cursor, or any AI-powered IDE by copying a directory.
+Dropkit is a folder of agent playbooks. Each skill is a self-contained directory containing a `SKILL.md` (the agent reads this), a `scripts/` folder (deterministic tooling the agent calls), and a `manifest.json` (deps and I/O). Drop a directory into `~/.claude/skills/` (or your IDE's equivalent) and the skill is installed.
 
-Each skill is a self-contained folder under `skills/<category>/<skill-name>/` with:
+Today the registry covers Atlassian integrations (Jira, Jira Align, Confluence space crawling), file-to-Markdown conversion (PDF, DOCX, XLSX, PPTX, images), Markdown-to-HTML rendering, Outlook `.msg` email conversion, and OpenAPI 3.1 contract generation against the Zalando guidelines. Heavier work (auth flows, retries, pagination, parsing, multipart uploads) lives in the `scripts/` of each skill, so the agent's job stays small: pick a subcommand, run it, relay the output.
 
-- `SKILL.md` — the agent playbook (what the agent reads and follows)
-- `manifest.json` — machine-readable metadata (id, deps, I/O)
-- `scripts/` — the code the agent invokes; heavy lifting lives here
-- optional `requirements.txt` / package install line declared in the manifest
+## Quickstart
+
+```bash
+git clone https://github.com/eugeneacn/dropkit.git
+cd dropkit
+bash quickstart.sh
+```
+
+Generates a sample diagram, runs the file-to-markdown image analyzer against it, and writes two real artifacts under `examples/`. No API keys, no LLM calls — just proof that the toolchain installs and the skill scripts run on your machine. ~30 seconds.
+
+For a working skill in your IDE, jump to **[Installing a skill into your IDE](#installing-a-skill-into-your-ide)** below.
 
 ## Catalog
 
 | Skill | Category | Purpose | Deps |
 |---|---|---|---|
 | [api-contract](skills/contracts/api-contract/) | contracts | Generate OpenAPI 3.1 contracts from natural language, code, or SQL, enforcing 138 Zalando RESTful API Guidelines rules. | none |
-| [kafka-event-schema](skills/contracts/kafka-event-schema/) | contracts | Generate Avro, JSON Schema, or Protobuf event schemas with metadata envelopes, compatibility rules, and Schema Registry integration. | none |
-| [docx-to-markdown](skills/converters/docx-to-markdown/) | converters | Convert Word `.docx` files to clean Markdown preserving headings, lists, tables, and formatting. | npm `mammoth` |
+| [file-to-markdown](skills/converters/file-to-markdown/) | converters | Convert documents (PDF, DOCX, PPTX, XLSX, XLS) and images (PNG, JPG, TIFF, BMP, WEBP, GIF) to Markdown. Documents use Docling for text extraction; images use a two-pass sliding-window vision strategy. | pip `docling`, `Pillow` |
 | [markdown-to-html](skills/converters/markdown-to-html/) | converters | Convert Markdown to styled, self-contained HTML with syntax highlighting, TOC, and responsive layout. | npm `marked`, `highlight.js` |
 | [msg-to-markdown](skills/converters/msg-to-markdown/) | converters | Convert Outlook `.msg` emails to structured Markdown preserving headers, body, and attachment metadata. | npm `@nicecode/msg-reader` |
-| [pdf-to-markdown](skills/converters/pdf-to-markdown/) | converters | Convert PDF files to structured Markdown using positional text extraction to detect headings, paragraphs, lists, and tables. | npm `pdfjs-dist` |
-| [pptx-to-markdown](skills/converters/pptx-to-markdown/) | converters | Convert PowerPoint files to Markdown preserving slide hierarchy, titles, bullet nesting, tables, and speaker notes. | npm `jszip`, `fast-xml-parser` |
-| [xlsx-to-markdown](skills/converters/xlsx-to-markdown/) | converters | Convert Excel spreadsheets to Markdown tables with multi-sheet support, header detection, and date formatting. | npm `xlsx` |
 | [confluence-crawler](skills/crawlers/confluence-crawler/) | crawlers | Crawl an authenticated Confluence space (Cloud or Server/DC) by hierarchy and convert pages to Markdown with frontmatter. Handles macros, attachments, link rewriting, depth limits, and idempotent re-crawling. | pip (see `requirements.txt`) |
+| [jira](skills/integrations/jira/) | integrations | Read and write Jira (Cloud or Server / Data Center) from chat — JQL search, fetch / create / update / delete issues, apply transitions, add comments and attachments, list projects and users. Auto-handles Cloud (REST v3, basic auth, ADF, nextPageToken) vs Server (REST v2, bearer PAT, plain text, startAt). Exports as JSON, JSONL, or CSV. The agent never sees your API token. | pip (see `requirements.txt`) |
 | [jira-align](skills/integrations/jira-align/) | integrations | Read and write Jira Align (Cloud or self-hosted) from chat — fetch, filter, and export epics, features, stories, teams, and more; create and update records; delete with confirmation. Exports as JSON, JSONL, or CSV. The agent never sees your API token. | pip (see `requirements.txt`) |
 
 ---
@@ -42,11 +46,11 @@ Install a skill by copying its folder — drop the directory directly into the s
 ```bash
 # user-scope (recommended)
 mkdir -p ~/.claude/skills
-cp -R skills/converters/pdf-to-markdown ~/.claude/skills/
+cp -R skills/converters/file-to-markdown ~/.claude/skills/
 
 # project-scope
 mkdir -p .claude/skills
-cp -R skills/converters/pdf-to-markdown .claude/skills/
+cp -R skills/converters/file-to-markdown .claude/skills/
 ```
 
 Claude Code discovers the skill via its `SKILL.md` frontmatter `name` field. Invoke it in chat with `/<skill-name>` or by describing the task — Claude will route to the matching skill automatically.
@@ -110,27 +114,36 @@ Generate an OpenAPI 3.1 contract.
 - **Output**: `.yaml` or `.json` OpenAPI document.
 - **Example prompt**: *"Generate an OpenAPI contract for a users CRUD API with pagination and idempotent POST."*
 
-### kafka-event-schema
+### file-to-markdown
 
-Generate a Kafka event schema (Avro / JSON Schema / Protobuf).
+Convert documents and images to Markdown. One skill covers PDF, DOCX, PPTX, XLSX, XLS, and the image formats (PNG, JPG, JPEG, TIFF, BMP, WEBP, GIF).
 
-- **Input**: event description, or path to existing schema / source code.
-- **Output**: `.avsc`, `.json`, `.proto`, or `.yaml` (AsyncAPI).
-- **Example prompt**: *"Generate an Avro schema for an OrderPlaced event with a standard metadata envelope."*
+- **Install deps**: `python -m pip install docling Pillow` (first Docling run downloads ML models, ~1–2 min; subsequent runs are fast)
+- **Example prompts**:
+  - *"Convert docs/whitepaper.pdf to Markdown."*
+  - *"Convert decks/q2-review.pptx to Markdown."*
+  - *"Convert data/sales.xlsx to Markdown tables, one per sheet."*
+  - *"Convert architecture-diagram.png to Markdown — it's an event-storming board, extract the sticky notes."*
 
-### docx-to-markdown
-
-Convert a Word document to Markdown.
-
-- **Install deps**: `npm install mammoth`
-- **Example prompt**: *"Convert docs/spec.docx to Markdown."*
+Documents go through Docling text extraction (`scripts/convert.py`). Images go through a two-pass sliding-window vision pipeline (`scripts/split_image.py`) that tiles the source with overlap so no element is bisected at a tile boundary.
 
 ### markdown-to-html
 
-Convert a Markdown file to styled HTML.
+Render a Markdown file to a self-contained, styled HTML page (sticky header, sidebar nav, syntax-highlighted code, callout boxes, Mermaid diagrams, print-ready). Deterministic — `marked` + `highlight.js` do the parsing; the agent only invokes the script.
 
-- **Install deps**: `npm install marked highlight.js`
-- **Example prompt**: *"Render notes/weekly.md as a self-contained HTML page with TOC."*
+- **Install deps**: `cd skills/converters/markdown-to-html && npm install`
+- **Verify the renderer**:
+
+  ```bash
+  node skills/converters/markdown-to-html/scripts/render.js examples/sample.md --output /tmp/sample.html
+  ```
+
+- **Example prompts**:
+  - *"Render notes/weekly.md as a self-contained HTML page with TOC."*
+  - *"Render docs/architecture.md to architecture.html with the green accent theme."*
+  - *"Render this for a fully offline environment — no internet allowed."* (uses `--no-mermaid`)
+
+Flags: `--output FILE`, `--title TEXT`, `--subtitle TEXT`, `--theme navy|green|teal|amber|rose`, `--no-mermaid`. Callouts are detected automatically from `**Note:**`, `**Tip:**`, `**Warning:**`, `**Important:**`, `**Stop:**` bold lead-ins; Mermaid blocks (` ```mermaid ` fences) pass through and the CDN script is auto-included only when at least one is present.
 
 ### msg-to-markdown
 
@@ -138,27 +151,6 @@ Convert an Outlook `.msg` email to Markdown.
 
 - **Install deps**: `npm install @nicecode/msg-reader`
 - **Example prompt**: *"Convert inbox/2026-03-customer-escalation.msg to Markdown."*
-
-### pdf-to-markdown
-
-Convert a PDF to Markdown using positional text extraction.
-
-- **Install deps**: `npm install pdfjs-dist@4.7.76`
-- **Example prompt**: *"Convert docs/whitepaper.pdf to Markdown."*
-
-### pptx-to-markdown
-
-Convert a PowerPoint deck to Markdown, preserving slide structure.
-
-- **Install deps**: `npm install jszip fast-xml-parser`
-- **Example prompt**: *"Convert decks/q2-review.pptx to Markdown."*
-
-### xlsx-to-markdown
-
-Convert an Excel spreadsheet to Markdown tables.
-
-- **Install deps**: `npm install xlsx`
-- **Example prompt**: *"Convert data/sales.xlsx to Markdown, one table per sheet."*
 
 ### confluence-crawler
 
@@ -187,6 +179,56 @@ Crawl an authenticated Confluence space and write each page as Markdown with YAM
   - *"Re-crawl ENG, forcing a refresh of every page."* (uses `--force`)
 
 Flags: `--space KEY` (required), `--root PAGE_ID`, `--depth N`, `--output DIR`, `--force`, `--no-attachments`, `--concurrency N`, `--insecure`, `--check`, `--verbose`. The API token is never accepted on the command line.
+
+### jira
+
+Talk to Jira (the issue tracker, **not** Jira Align — those are separate skills) from chat. Ask for issues by key or JQL, create and update issues, transition workflow states, comment, attach files, and list projects or users. Works against Atlassian Cloud (REST v3) and self-hosted Server / Data Center (REST v2); the skill handles the auth, API version, ADF wrapping, and pagination differences automatically.
+
+- **Install deps**: `python -m pip install -r skills/integrations/jira/requirements.txt`
+- **Get an access token**:
+
+  - **Atlassian Cloud** — go to https://id.atlassian.com/manage-profile/security/api-tokens, click **Create API token**, name it, and copy the value. Authentication uses your Atlassian account email plus this token (Basic auth).
+  - **Server / Data Center (on-prem)** — in Jira, click your avatar → **Profile** → **Personal Access Tokens** → **Create token**. Name the token, set an expiry, click **Create**, and copy the value shown (it is only displayed once). Authentication uses the token as a bearer credential; no email is required.
+
+- **One-time setup** (interactive — prompts for base URL, email if Cloud, and the token; writes `~/.config/dropkit/credentials.env` at mode 0600, merged with any existing dropkit credentials):
+
+  ```bash
+  bash skills/integrations/jira/scripts/setup_credentials.sh
+  ```
+
+- **Verify connectivity**:
+
+  ```bash
+  python skills/integrations/jira/scripts/jira.py check
+  ```
+
+- **Example prompts**:
+  - *"Show me the 50 most recently created bugs in PROJ — just summary, status, priority, created."*
+  - *"Fetch PROJ-123 with renderedFields and changelog expanded."*
+  - *"Export every issue assigned to me to issues.jsonl."*
+  - *"Create a Task in PROJ titled 'Onboarding revamp' with this description …"*
+  - *"Move PROJ-123 to In Progress and add the labels urgent and onboarding."*
+  - *"Add a comment to PROJ-123 saying 'Pushed the fix in #4567.' and attach screenshot.png."*
+
+- **What the skill can do**:
+
+  | Action | Example |
+  |---|---|
+  | Fetch one issue | `get-issue PROJ-123 --fields summary,status` |
+  | JQL search | `search "project = PROJ AND status = 'In Progress'" --limit 50` |
+  | Create an issue | `create-issue --field 'project={"key":"PROJ"}' --field summary="..." --field 'issuetype={"name":"Task"}'` |
+  | Update an issue (PUT, partial) | `update-issue PROJ-123 --field 'labels=["urgent"]'` |
+  | Delete an issue | `delete-issue PROJ-123 --yes` |
+  | Apply a transition | `transition PROJ-123 --to "In Progress"` |
+  | Add a comment | `comment PROJ-123 --body "text"` |
+  | Upload an attachment | `attach PROJ-123 --file ./screenshot.png` |
+  | List projects | `list-projects --query KW` |
+  | Find a user | `list-users --query ada@example.com` |
+  | Anything else | `raw GET issue/PROJ-123/worklog` |
+
+  Output format is selectable with `--format json|jsonl|csv`, and `--output FILE` writes to disk instead of stdout. For create and update, `--field KEY=VALUE` values are JSON-parsed, so `--field 'labels=["a","b"]'` sends an array, `--field 'project={"key":"PROJ"}'` sends an object, and anything that fails to parse is sent as a string.
+
+- **Safety**: the API token is never accepted on the command line, `delete-issue` refuses to run without `--yes`, status changes go through `transition` (Jira ignores `status` in `update-issue` by design), and the agent is instructed to confirm any create/update/delete/transition before executing it.
 
 ### jira-align
 
@@ -239,6 +281,18 @@ Talk to Jira Align from chat. Ask for records, filter collections, or make chang
 
 ---
 
+## What this repo writes outside its own directory
+
+The skills are conservative about side effects. The full list of paths a dropkit skill can touch outside the repo:
+
+- `~/.config/dropkit/credentials.env` (mode 0600) — created and rewritten only by `setup_credentials.sh` on your explicit invocation. Holds API tokens for the authenticated skills (jira, jira-align). One file per machine, shared across skills, namespaced keys.
+- `~/.config/confluence-crawler/config.env` (mode 0600) — legacy path, same shape as the dropkit shared file, kept for backward compatibility.
+- The skill's own working directory (`scripts/` or wherever you run from) for output files like converted Markdown or JSONL exports — and only when you ask for an output path.
+
+No daemons, no system installs, no telemetry, no background processes, no `~/.bashrc` edits, no global npm or pip installs. The `quickstart.sh` and the per-skill `setup_credentials.sh` are the only scripts that write to your system at all, and both run only when you invoke them.
+
+Mutating skills (jira create / update / delete, jira-align create / update / delete, etc.) require explicit user confirmation — `--yes` is never inferred from intent, and the agent is instructed to confirm payload and target with you before any non-read operation. The complete pattern is documented in [`references/auth-rules.md`](references/auth-rules.md).
+
 ## Shared credential file
 
 Skills that call authenticated third-party APIs read their secrets from a shared file at `~/.config/dropkit/credentials.env` (mode 0600). Each skill namespaces its keys (e.g. `JIRAALIGN_*` for jira-align). Re-running any skill's `setup_credentials.sh` only rewrites that skill's own keys — other skills' entries are preserved. The legacy per-skill path `~/.config/confluence-crawler/config.env` is still read for backward compatibility.
@@ -254,13 +308,11 @@ dropkit/
   skills/
     <category>/
       <skill-name>/
-        manifest.json     # metadata + deps + targets
+        manifest.json     # metadata + deps + I/O
         SKILL.md          # agent playbook
         scripts/          # executable logic
         requirements.txt  # (when pip-based)
         evals/            # expected-behavior tests
-  scripts/                # repo-level tooling
-  targets/                # IDE-specific output helpers
 ```
 
 ---

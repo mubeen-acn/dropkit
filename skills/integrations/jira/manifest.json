@@ -2,9 +2,9 @@
   "id": "jira",
   "name": "Jira Client",
   "version": "1.0.0",
-  "description": "Read, create, and update Jira issues (Cloud or Data Center) via the REST API. Supports searching with JQL, creating stories/tasks/bugs/epics, updating fields, transitioning status, adding comments, managing subtasks, generating acceptance criteria, and bulk export. Designed for non-technical users — translates natural language intent into the right API calls.",
+  "description": "Read and write Jira (Atlassian Cloud or Server / Data Center) via the REST API. Exposes JQL search, get/create/update/delete on issues and projects, transitions, comments, attachments, user lookup, and a raw escape hatch. Handles Cloud (basic auth with email + API token, REST v3, ADF, nextPageToken pagination) vs Server/DC (bearer Personal Access Token, REST v2, plain-text bodies, startAt pagination) automatically. The agent never sees the API token.",
   "category": "integrations",
-  "tags": ["jira", "atlassian", "rest-api", "agile", "stories", "acceptance-criteria", "authenticated"],
+  "tags": ["jira", "atlassian", "rest-api", "jql", "issue-tracking", "authenticated"],
   "author": "dropkit",
   "license": "MIT",
   "deps": {
@@ -14,12 +14,12 @@
     ]
   },
   "input": {
-    "arguments": "a subcommand and its arguments (e.g., search \"project = ACME AND status = 'In Progress'\" --limit 20)",
+    "arguments": "a subcommand and its arguments (e.g., search \"project = PROJ AND status = Open\" --limit 50 --output issues.jsonl --format jsonl)",
     "env": {
-      "JIRA_BASE_URL": "Base URL. Cloud: https://<site>.atlassian.net. Data Center: https://jira.corp.example.com",
-      "JIRA_USER_EMAIL": "Atlassian account email (Cloud only). Not needed for Data Center PAT auth.",
-      "JIRA_API_TOKEN": "Cloud: API token from id.atlassian.com. Data Center: Personal Access Token. Populated by setup_credentials.sh, never passed on CLI.",
-      "JIRA_FLAVOR": "Optional: cloud | datacenter (auto-detected from URL by default)"
+      "JIRA_BASE_URL": "Base URL. Cloud: https://<site>.atlassian.net. Server/DC: https://jira.corp.example.com (with optional context path).",
+      "JIRA_EMAIL": "Atlassian account email — required for Cloud (used as Basic auth username with the API token as password). Unused on Server/DC.",
+      "JIRA_API_TOKEN": "Cloud API token (id.atlassian.com/manage-profile/security/api-tokens) or Server/DC Personal Access Token. Populated by setup_credentials.sh, never passed on CLI.",
+      "JIRA_FLAVOR": "Optional: cloud | server (auto-detected from URL by default; controls auth scheme and API version)."
     }
   },
   "output": {

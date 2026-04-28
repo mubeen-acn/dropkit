@@ -39,15 +39,15 @@ All keys may be overridden by matching environment variables.
 
 ### Security rules (non-negotiable)
 
-- Secrets live only in `~/.config/dropkit/credentials.env` (mode 0600) or
-  environment variables.
-- **Never** read that file, print its contents, or echo the token. It is
-  not yours to see.
-- **Never** accept the token on the command line. The CLI refuses flags
-  like `--token`, `--api-token`, and `--bearer` and exits with an error.
-- If credentials are missing or invalid, instruct the user to run
-  `scripts/setup_credentials.sh` themselves — do not run it for them (it
-  prompts interactively).
+- Secrets live only in `~/.config/dropkit/credentials.env` (mode 0600)
+  or environment variables. **Never** read that file, print it, or echo
+  the token.
+- **Never** put the token on the command line. The CLI refuses flags
+  like `--token` / `--api-token` / `--bearer` and exits — do not work
+  around it.
+- If `check` exits 2 (missing or invalid creds), tell the user to run
+  `bash scripts/setup_credentials.sh` themselves. It's interactive — do
+  not run it for them.
 
 ### Step 1: Verify the environment
 

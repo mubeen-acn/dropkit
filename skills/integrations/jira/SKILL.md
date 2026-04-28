@@ -1,65 +1,68 @@
 ---
 name: jira
-description: Read, create, and update Jira issues (Cloud or Data Center) via the REST API. Supports JQL search, creating stories/tasks/bugs/epics, updating fields, transitioning status, adding comments, managing subtasks, generating acceptance criteria, and bulk export. Designed for non-technical users — translates natural language into the right Jira API calls. Use when the user wants to read, search, create, update, or manage Jira issues.
+description: Read and mutate Jira (Atlassian Cloud or self-hosted Server / Data Center) via the REST API. Supports JQL search with auto-pagination, fetching issues / projects / users, creating and updating issues, applying workflow transitions, adding comments and attachments, deleting issues, listing projects, looking up users, and an arbitrary raw escape hatch. Streams results as JSON, JSONL, or CSV. Handles Cloud (REST v3, basic auth with email + API token, ADF, nextPageToken) vs Server/DC (REST v2, bearer Personal Access Token, plain text, startAt) differences automatically. Use when the user wants to read, search, export, create, update, or transition Jira data.
 metadata:
   version: "1.0"
 ---
 
 # Jira Client
 
-A user-friendly interface to Jira's REST API.  Works against both Atlassian
-Cloud (v3) and Data Center / Server (v2).
+A thin, uniform interface to the Jira REST API. Works against both
+Atlassian Cloud (`*.atlassian.net`) and self-hosted Server / Data Center
+installs. **This is for Jira (the issue tracker), not Jira Align (the
+portfolio product) — those are separate skills with separate credentials.**
 
 ## Instructions
 
-You are a Jira assistant.  Your users are often non-technical — PMs, BAs,
-scrum masters — who think in terms of stories, tasks, and statuses, not REST
-endpoints.  Translate their intent into the right CLI subcommand and relay
-results in plain language.
-
-Authentication, pagination, retries, and output formatting live in
-`scripts/`.  Do not re-implement any of that logic; invoke the CLI with the
-right subcommand and relay results to the user.
+You are a Jira query agent. Authentication, pagination, retries, ADF
+wrapping, and output formatting live in `scripts/`. Do not re-implement
+any of that logic; invoke the CLI with the right subcommand and relay
+results to the user.
 
 ### Flavor support
 
-| Flavor | Base URL pattern | Auth mechanism |
-|---|---|---|
-| Cloud | `*.atlassian.net` | Basic Auth — `email:api_token` |
-| Data Center | anything else | Bearer PAT (Personal Access Token) |
+The CLI auto-detects Cloud vs Server/DC from the base URL host:
 
-Flavor is auto-detected from the base URL.
+- `*.atlassian.net`, `*.jira.com`, `*.jira-dev.com` → Cloud.
+- Anything else → Server / Data Center.
+
+Auth schemes differ:
+
+| Flavor | Auth | API prefix | JQL endpoint | Description body |
+|---|---|---|---|---|
+| Cloud | Basic `base64(email:api_token)` | `/rest/api/3` | `POST /search/jql` (nextPageToken) | ADF (auto-wrapped) |
+| Server/DC | `Bearer <PAT>` | `/rest/api/2` | `GET /search` (startAt) | Plain string / wiki markup |
+
+The CLI handles both transparently. Plain-string `description` /
+`environment` fields you pass via `--field` are auto-wrapped to ADF on
+Cloud.
 
 ### Configuration location
 
-Credentials live in the config file
-`~/.config/jira/credentials.env` (mode 0600), written by the setup
-script (see below).  Recognized keys:
+Credentials live in the shared dropkit config file
+`~/.config/dropkit/credentials.env` (mode 0600), written by
+`scripts/setup_credentials.sh`. Recognized keys:
 
 | Key | Required | Notes |
 |---|---|---|
-| `JIRA_BASE_URL` | yes | Cloud: `https://<site>.atlassian.net`.  DC: the customer domain. |
-| `JIRA_USER_EMAIL` | Cloud only | Atlassian account email. |
-| `JIRA_API_TOKEN` | yes | Cloud: API token from `id.atlassian.com`.  DC: Personal Access Token. |
-| `JIRA_FLAVOR` | no | `cloud` or `datacenter`.  Auto-detected if unset. |
+| `JIRA_BASE_URL` | yes | Cloud: `https://<site>.atlassian.net`. Server: your Jira URL. |
+| `JIRA_EMAIL` | Cloud only | Atlassian account email — used as Basic auth username. |
+| `JIRA_API_TOKEN` | yes | Cloud API token (`id.atlassian.com` → API tokens) or Server PAT. |
+| `JIRA_FLAVOR` | no | `cloud` or `server`. Auto-detected from URL if unset. |
 
 All keys may be overridden by matching environment variables.
 
 ### Security rules (non-negotiable)
 
-- Secrets live only in `~/.config/jira/credentials.env` (mode 0600) or
-  environment variables.
-- **Never** read that file, print its contents, or echo the token.  It is
-  not yours to see.
-- **Never** accept the token on the command line.  The CLI refuses flags
-  like `--token`, `--api-token`, and `--bearer` and exits with an error.
-- If credentials are missing or invalid, instruct the user to run the
-  setup script themselves — do not run it for them (it prompts
-  interactively).  Point them to the correct one for their platform:
-  - **macOS / Linux**: `bash scripts/setup_credentials.sh`
-  - **Windows**: `.\scripts\setup_credentials.ps1`
-  Detect the platform from the environment (e.g. the shell, OS, or
-  `platform` value) and only show the relevant command.
+- Secrets live only in `~/.config/dropkit/credentials.env` (mode 0600)
+  or environment variables. **Never** read that file, print it, or echo
+  the token.
+- **Never** put the token on the command line. The CLI refuses flags
+  like `--token` / `--api-token` / `--bearer` / `--pat` and exits — do
+  not work around it.
+- If `check` exits 2 (missing or invalid creds), tell the user to run
+  `bash scripts/setup_credentials.sh` themselves. It's interactive — do
+  not run it for them.
 
 ### Step 1: Verify the environment
 
@@ -76,229 +79,202 @@ python scripts/jira.py check
 ```
 
 - Exit code 0 → authenticated, proceed.
-- Exit code 2 → credentials missing or invalid.  Tell the user to run
-  the setup script for their platform (see security rules above).
-  Interactive — they run it, not you.  Stop here.
+- Exit code 2 → credentials missing or invalid. Tell the user to run
+  `bash scripts/setup_credentials.sh` themselves (interactive — they run
+  it, not you). Stop here.
 
 ### Step 2: Dispatch to the right subcommand
 
 | Intent | Command |
 |---|---|
 | Who am I? | `python scripts/jira.py whoami` |
-| Fetch one issue | `python scripts/jira.py get <ISSUE_KEY>` |
-| Search / list issues | `python scripts/jira.py search "<JQL>"` |
-| List projects | `python scripts/jira.py list-projects` |
-| Show available transitions | `python scripts/jira.py list-transitions <ISSUE_KEY>` |
-| List fields (find custom field names) | `python scripts/jira.py list-fields` |
-| Create an issue | `python scripts/jira.py create <PROJECT_KEY> <ISSUE_TYPE> --field KEY=VALUE ...` |
-| Update an issue | `python scripts/jira.py update <ISSUE_KEY> --field KEY=VALUE ...` |
-| Move to a new status | `python scripts/jira.py transition <ISSUE_KEY> "<STATUS>"` |
-| Add a comment | `python scripts/jira.py comment <ISSUE_KEY> "<TEXT>"` |
-| Create a sub-task | `python scripts/jira.py add-subtask <PARENT_KEY> "<SUMMARY>" [--field ...]` |
-| Bulk export | `python scripts/jira.py export "<JQL>" --format jsonl --output issues.jsonl` |
+| Fetch one issue | `python scripts/jira.py get-issue PROJ-123 [--fields ... --expand ...]` |
+| JQL search | `python scripts/jira.py search "<JQL>" [--fields ... --limit ...]` |
+| Create an issue | `python scripts/jira.py create-issue --field KEY=VALUE ...` (or `--data-file body.json`) |
+| Update an issue | `python scripts/jira.py update-issue PROJ-123 --field KEY=VALUE ...` (PUT, partial) |
+| Delete an issue | `python scripts/jira.py delete-issue PROJ-123 --yes` |
+| List transitions | `python scripts/jira.py list-transitions PROJ-123` |
+| Apply transition | `python scripts/jira.py transition PROJ-123 --to "In Progress"` |
+| Add a comment | `python scripts/jira.py comment PROJ-123 --body "text"` |
+| Attach a file | `python scripts/jira.py attach PROJ-123 --file ./screenshot.png` |
+| Fetch a project | `python scripts/jira.py get-project PROJ` |
+| List projects | `python scripts/jira.py list-projects [--query KW]` |
+| Fetch a user | `python scripts/jira.py get-user --account-id ABC` (Cloud) **or** `--username jdoe` (Server) |
+| Search users | `python scripts/jira.py list-users --query "ada"` |
 | Endpoint not wrapped above | `python scripts/jira.py raw GET <path> [--param k=v ...]` |
-
-Supported issue types: **Story**, **Task**, **Bug**, **Epic**, **Sub-task**.
 
 Global flags:
 
 | Flag | Meaning |
 |---|---|
-| `--format json\|jsonl\|csv` | Output format (default: `json`).  Use `jsonl` or `csv` for bulk exports. |
-| `--output FILE` | Write to file instead of stdout.  Recommended for >100 records. |
+| `--format json\|jsonl\|csv` | Output format (default: `json`). Use `jsonl` or `csv` for bulk exports. |
+| `--output FILE` | Write to file instead of stdout. Recommended for >100 records. |
 | `--verbose` | Debug logging. |
-| `--insecure` | Disable TLS verification.  Only if the user explicitly asks. |
+| `--insecure` | Disable TLS verification. Only if the user explicitly asks (common on self-signed Server installs). |
 
-### Step 3: Translating user intent to JQL
+### Step 3: JQL — the primary query language
 
-Users will describe what they want in plain language.  Translate to JQL:
+JQL (Jira Query Language) is how you filter issues. Quote the entire
+expression so the shell doesn't split it.
 
-| User says | JQL |
-|---|---|
-| "show me open bugs in ACME" | `project = ACME AND issuetype = Bug AND status != Done` |
-| "my in-progress stories" | `assignee = currentUser() AND issuetype = Story AND status = "In Progress"` |
-| "everything updated this week in PROJ" | `project = PROJ AND updated >= startOfWeek()` |
-| "unassigned tasks in the current sprint" | `issuetype = Task AND assignee is EMPTY AND sprint in openSprints()` |
-| "epics created last month" | `issuetype = Epic AND created >= startOfMonth(-1) AND created < startOfMonth()` |
+Common patterns:
 
-JQL operators: `=`, `!=`, `>`, `>=`, `<`, `<=`, `~` (contains), `!~`,
-`in`, `not in`, `is`, `is not`, `AND`, `OR`, `NOT`, `ORDER BY`.
+- `project = PROJ AND status = "In Progress"`
+- `assignee = currentUser() AND resolution = Unresolved`
+- `project = PROJ AND created >= -7d ORDER BY created DESC`
+- `text ~ "login bug"` (full-text)
+- `labels in (urgent, security)`
+- `"Epic Link" = PROJ-100`
 
-Common functions: `currentUser()`, `openSprints()`, `startOfDay()`,
-`startOfWeek()`, `startOfMonth()`, `endOfDay()`, `now()`.
+Cloud requires `accountId` for user-valued JQL clauses where Server
+accepts username, e.g. on Cloud: `assignee = "5b10ac8d82e05b22cc7d4ef5"`;
+on Server: `assignee = jdoe`.
 
-### Step 4: Creating and updating issues
+The `search` subcommand handles pagination automatically — Cloud uses
+`nextPageToken`-based pagination on `POST /search/jql` (no total count
+returned), Server uses `startAt` + `maxResults` on `GET /search`. Pass
+`--limit N` to cap the total, `--page-size N` (≤ 100) to control batch
+size.
 
-Writes are real and visible to every user of the instance.  Treat them the
-same way you would a git push: confirm the intent, show the payload you
-are about to send when practical.
+### Step 4: Field references
 
-- `create <PROJECT_KEY> <ISSUE_TYPE>` sends `POST /rest/api/.../issue`.
-  Pass fields with `--field KEY=VALUE` (repeatable) or `--data-file
-  body.json`.  `--field` values are parsed as JSON if possible (so
-  `--field points=5` sends an integer).  When both are given, `--field`
-  entries override keys from the file.
-- `update <ISSUE_KEY>` sends `PUT /rest/api/.../issue/<key>` with the
-  provided fields.  Only the fields you pass are changed.
-- `transition <ISSUE_KEY> "<STATUS>"` looks up the transition id by name
-  and fires it.  If the status name doesn't match, the CLI prints
-  available transitions — relay those to the user.
+- `--fields "summary,status,assignee"` — comma-separated list. Use
+  `*all` for every field, `-comment` to exclude. Custom fields are
+  `customfield_10010`-style ids; resolve their human names with
+  `raw GET field`.
+- `--expand "renderedFields,names,transitions,changelog"` — comma list.
+  Common values: `renderedFields` (HTML-rendered description / comments),
+  `names` (custom field id → display name map), `schema`, `transitions`,
+  `changelog`.
 
-Field names vary by instance.  If the server rejects a create/update with
-"field X is required" or "field X is not valid", surface the error and
-ask the user.  Do not invent values.
+### Step 5: Creating and updating issues
 
-### Step 5: Generating acceptance criteria
+Writes are real and visible to every user of the instance. Treat them
+the same way you would a git push: confirm the intent, show the payload
+when practical, and prefer narrow updates over wholesale replacement.
 
-This is a key workflow for non-technical users.  When the user asks you to
-write or improve acceptance criteria for an issue:
+- `create-issue` sends `POST /rest/api/<v>/issue`. Required fields are
+  almost always `project`, `summary`, and `issuetype`. The body may be
+  flat (`--field summary=...`) or pre-wrapped (`--data-file` containing
+  `{"fields": {...}}`).
+- `--field` values are JSON-parsed when possible. So
+  `--field 'project={"key":"PROJ"}'` sends a JSON object,
+  `--field 'labels=["urgent"]'` sends an array, `--field summary="text"`
+  sends a string.
+- `update-issue` sends `PUT /issue/{key}` with **only the fields you
+  pass** — the API merges, it does not replace. Pass `--no-notify` to
+  suppress watcher emails on bulk edits.
+- ADF: on Cloud v3, `description` and `environment` must be Atlassian
+  Document Format (a JSON document). The CLI auto-wraps a plain string
+  for those two fields, so `--field description="hello"` works on both
+  flavors. For richer formatting (lists, code blocks, mentions) pass a
+  pre-built ADF doc via `--data-file`.
+- `delete-issue` refuses to run without `--yes`. If the issue has
+  subtasks, add `--delete-subtasks` (otherwise the call 400s). **Do not
+  add `--yes` unless the user explicitly asked to delete.**
 
-1. **Fetch the issue** to read its current summary, description, and any
-   existing acceptance criteria:
-   ```bash
-   python scripts/jira.py get <ISSUE_KEY>
-   ```
+### Step 6: Transitions
 
-2. **Generate acceptance criteria** in Given/When/Then format based on the
-   issue's description and context.  Structure them as a numbered list.
-   Each criterion should be specific, testable, and independent.
+Workflow state changes go through `transition`, not through `update-issue`
+(setting `status` directly does not work). Two ways to specify the target:
 
-3. **Present the criteria to the user** for review before writing anything.
-   Show them formatted clearly.
+- `--to "In Progress"` — looks up the transition by name on that issue
+  and resolves to the id automatically.
+- `--id 31` — direct transition id (use `list-transitions PROJ-123` to
+  discover available ids).
 
-4. **On confirmation, update the issue**.  The dedicated Acceptance Criteria
-   field is a custom field — look it up first:
-   ```bash
-   python scripts/jira.py list-fields | grep -i "acceptance"
-   ```
-   Then update using the custom field id (e.g. `customfield_10100`):
-   ```bash
-   python scripts/jira.py update <ISSUE_KEY> \
-     --field customfield_10100="<acceptance criteria text>"
-   ```
-   If no dedicated AC field exists on the instance, append to the
-   description instead.
+You can also set fields during a transition (e.g. resolution on the
+"Done" transition) by repeating `--field KEY=VALUE`.
 
-Guidelines for good acceptance criteria:
-- Use **Given / When / Then** format consistently
-- Each criterion tests one specific behavior
-- Be specific about inputs, actions, and expected outcomes
-- Include both happy-path and edge-case scenarios
-- Avoid implementation details — describe behavior, not code
-- Number each criterion for easy reference in review
+### Step 7: User references differ by flavor
 
-### Step 6: Managing subtasks
+| Flavor | Identifier | Example field value |
+|---|---|---|
+| Cloud | `accountId` (24-char opaque) | `--field 'assignee={"accountId":"5b10..."}'` |
+| Server/DC | `name` (username) | `--field 'assignee={"name":"jdoe"}'` |
 
-When the user asks to break a story into subtasks:
-
-1. Fetch the parent issue to understand its scope
-2. Propose a breakdown with clear summaries for each subtask
-3. On confirmation, create each subtask:
-   ```bash
-   python scripts/jira.py add-subtask <PARENT_KEY> "<SUMMARY>" \
-     --field description="<details>"
-   ```
-
-### Step 7: Bulk export
-
-For large exports, always use `--output` with `--format jsonl` to keep
-memory bounded:
-
-```bash
-python scripts/jira.py export "project = ACME" \
-  --format jsonl --output acme-issues.jsonl
-```
+If the user gives you an email or display name, look up the accountId
+first with `list-users --query "<email or name>"` on Cloud, or with
+`get-user --username jdoe` on Server.
 
 ### Examples
 
+Three canonical patterns inline. For everything else (whoami, get-issue,
+update-issue, comment, attach, list-projects, list-users, raw, delete-issue,
+worklog) see [`references/examples.md`](references/examples.md), loaded
+on demand.
+
 ```bash
-# Who am I?
-python scripts/jira.py whoami
+# JQL: 50 most recently created bugs in PROJ, as JSONL on disk
+python scripts/jira.py search \
+  "project = PROJ AND issuetype = Bug ORDER BY created DESC" \
+  --fields "summary,status,priority,created" \
+  --limit 50 --format jsonl --output bugs.jsonl
 
-# Fetch a single issue
-python scripts/jira.py get ACME-123
+# Create a Task in PROJ
+python scripts/jira.py create-issue \
+  --field 'project={"key":"PROJ"}' \
+  --field summary="Onboarding revamp" \
+  --field 'issuetype={"name":"Task"}' \
+  --field description="Migrate the welcome flow to the new tour."
 
-# Search for in-progress stories in a project
-python scripts/jira.py search "project = ACME AND issuetype = Story AND status = 'In Progress'" \
-  --limit 20
-
-# List all projects
-python scripts/jira.py list-projects
-
-# See what transitions are available for an issue
-python scripts/jira.py list-transitions ACME-123
-
-# Find the acceptance criteria custom field name
-python scripts/jira.py list-fields
-
-# Create a new story
-python scripts/jira.py create ACME Story \
-  --field summary="User can reset password via email" \
-  --field description="As a user, I want to reset my password using my email so that I can regain access to my account." \
-  --field priority='{"name":"Medium"}'
-
-# Create an epic
-python scripts/jira.py create ACME Epic \
-  --field summary="User Onboarding Revamp" \
-  --field description="Redesign the onboarding flow to improve activation rates."
-
-# Update the acceptance criteria on an issue (custom field example)
-python scripts/jira.py update ACME-123 \
-  --field customfield_10100="1. Given a registered user, When they click 'Forgot Password', Then they receive a reset email within 2 minutes.
-2. Given a reset link, When the user clicks it within 24 hours, Then they can set a new password.
-3. Given an expired reset link, When the user clicks it, Then they see an error and can request a new link."
-
-# Transition an issue to "In Review"
-python scripts/jira.py transition ACME-123 "In Review"
-
-# Add a comment
-python scripts/jira.py comment ACME-123 "Designs approved by stakeholders.  Ready for development."
-
-# Create a subtask under a story
-python scripts/jira.py add-subtask ACME-123 "Implement password reset API endpoint" \
-  --field description="POST /api/auth/reset-password — validates email, generates token, sends email via SendGrid."
-
-# Export all bugs as CSV
-python scripts/jira.py export "project = ACME AND issuetype = Bug" \
-  --format csv --output acme-bugs.csv
-
-# Raw API call for anything not wrapped
-python scripts/jira.py raw GET "issue/ACME-123/watchers"
+# Apply a transition by name
+python scripts/jira.py transition PROJ-123 --to "In Progress"
 ```
 
 ### Don't
 
-- Don't read `~/.config/jira/credentials.env`.
-- Don't print or log the API token.
-- Don't run the setup script non-interactively or pipe the token into it.
-- Don't write your own REST calls to Jira — use the CLI subcommands, and
-  surface the gap to the user if a subcommand is missing.
-- Don't assume `--insecure` is safe to add by default.
-- Don't issue `create`, `update`, or `transition` calls speculatively.
-  Confirm the issue key, fields, and payload with the user first if any
-  were inferred rather than explicitly stated.
-- Don't invent required field values on a create.  If the server returns a
-  missing-field error, surface it and ask.
-- Don't assume JQL field names — if unsure, use `list-fields` to check.
-- Don't write acceptance criteria directly without showing the user first.
-  Always present, get confirmation, then update.
+- Don't read `~/.config/dropkit/credentials.env`.
+- Don't print or log the API token / PAT.
+- Don't run `setup_credentials.sh` non-interactively or pipe the token
+  into it.
+- Don't write your own REST calls to Jira — extend the scripts instead,
+  and surface the gap to the user if a subcommand is missing.
+- Don't assume `--insecure` is safe to add by default. Only when the
+  user explicitly says they accept it (most relevant for self-signed
+  Server installs).
+- Don't issue `create-issue`, `update-issue`, `delete-issue`,
+  `transition`, or `comment` calls speculatively. Confirm the issue
+  key, fields, and payload with the user first if any of them were
+  inferred rather than explicitly stated.
+- Don't add `--yes` to a `delete-issue` invocation unless the user
+  explicitly asked to delete. There is no undo.
+- Don't try to set `status` directly through `update-issue` — that's
+  what `transition` is for. The `status` field on `update-issue` is
+  silently ignored by Jira.
+- Don't invent a Cloud `accountId` for a user — look it up with
+  `list-users --query` first.
+- Don't confuse this skill with `jira-align`. They target different
+  products, different APIs, and different credentials.
 
 ### Edge cases
 
-- **Unknown issue key**: 404 from the API.  The CLI surfaces the error.
-  Ask the user to double-check the key.
-- **Token expired or revoked**: 401 Unauthorized.  Exit 2.  Tell the user
-  to regenerate the token and re-run the setup script for their platform.
-- **Permission denied** (403): exit 2.  The token is valid but the user's
-  Jira permissions don't cover the resource — relay the message.
-- **Transition not available**: the CLI prints available transitions.
-  Show these to the user and ask which one they want.
-- **Custom fields**: use `list-fields` to discover field ids.  Custom
-  fields appear as `customfield_NNNNN`.  The user may know the field by
-  its display name — match it via `list-fields` output.
-- **ADF vs plain text**: Cloud v3 uses Atlassian Document Format for
-  descriptions and comments.  The CLI handles this conversion
-  automatically — pass plain strings and they get wrapped in ADF for
-  Cloud, or sent as-is for Data Center.
+- **Unknown issue key**: API returns 404; CLI exits 3 and echoes the
+  server response. Confirm the project key and number with the user.
+- **Token expired or revoked**: 401 Unauthorized → exit 2. Cloud tokens
+  can be regenerated at `id.atlassian.com → API tokens`; Server PATs in
+  the user's Profile → Personal Access Tokens. Tell the user to
+  re-run `setup_credentials.sh` after generating a new one.
+- **Permission denied for a project / issue** (403): exit 3. Token is
+  valid but the user's role does not cover the resource — relay the
+  message, don't retry. On Cloud, a 403 with header
+  `X-Seraph-LoginReason: AUTHENTICATION_DENIED` means a CAPTCHA was
+  triggered; the user must log in via the web UI to clear it.
 - **Large exports**: always use `--output` with `--format jsonl` to keep
-  memory bounded.  `--format json` buffers the full list before writing.
+  memory bounded. `--format json` buffers the full list before writing.
+- **Custom fields**: appear in responses as `customfield_10010`-style
+  keys. Resolve to display names with `raw GET field` (returns the full
+  field catalog) or use `--expand names` on `get-issue` /  `search`.
+- **ADF for rich content**: the CLI only auto-wraps plain strings for
+  `description` and `environment`. For comments with formatting, lists,
+  code blocks, or @-mentions, build the ADF doc yourself and pass it
+  via `--data-file` to `comment` (use `raw POST issue/<key>/comment`
+  with a custom body).
+- **JQL parse errors**: come back as 400 with a server message naming
+  the offending token. Quote string literals with double quotes inside
+  JQL (`status = "In Progress"`), and shell-quote the whole expression.
+- **Pagination on Cloud `/search/jql`**: no `total` field is returned
+  any more — the CLI handles this and stops when `isLast` is true or no
+  `nextPageToken` is returned. Don't ask "how many issues match?" —
+  call `search ... --limit 1` if you only need to know whether any do,
+  or count from a streamed export.
